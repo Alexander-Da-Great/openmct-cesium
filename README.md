@@ -1,4 +1,4 @@
-# Open MCT Heatmap
+# Open MCT Cesium
 
 A plugin for [Open MCT](https://nasa.github.io/openmct)
 adding ceasium 3d  visualizations of telemetry data.
