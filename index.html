@@ -85,6 +85,16 @@
                 end: now
             });
 
+            // Create test satellite objects
+            const testSatellite1 = {
+                identifier: {
+                    namespace: 'test',
+                    key: 'satellite-1'
+                },
+                name: 'ISS',
+                type: 'satellite'
+            };
+
             // Create a simple root object for testing
             const rootObject = {
                 identifier: {
@@ -93,7 +103,9 @@
                 },
                 name: 'Test Root',
                 type: 'folder',
-                composition: []
+                composition: [
+                    testSatellite1.identifier
+                ]
             };
 
             // Add a test object provider
@@ -102,7 +114,10 @@
                     if (identifier.key === 'root') {
                         return Promise.resolve(rootObject);
                     }
-                    // Return a test satellite object
+                    if (identifier.key === 'satellite-1') {
+                        return Promise.resolve(testSatellite1);
+                    }
+                    // Return a generic test satellite object for any other request
                     return Promise.resolve({
                         identifier: identifier,
                         name: 'Test Satellite',

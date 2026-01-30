@@ -9,6 +9,7 @@ class CesiumService {
   constructor() {
     this.viewer = null;
     this.container = null;
+    this.satelliteEntities = new Map(); // Track satellite entities by ID
   }
 
   /**
@@ -126,6 +127,75 @@ class CesiumService {
   removeEntity(entity) {
     if (this.viewer && entity) {
       this.viewer.entities.remove(entity);
+    }
+  }
+
+  /**
+   * Set or update a satellite's position on the globe
+   * @param {string} id - Unique identifier for the satellite
+   * @param {Object} position - Position object with lat, lon, alt
+   * @param {number} position.lat - Latitude in degrees
+   * @param {number} position.lon - Longitude in degrees
+   * @param {number} position.alt - Altitude in meters
+   * @returns {Cesium.Entity|null} The satellite entity
+   */
+  setSatellitePosition(id, { lat, lon, alt }) {
+    if (!this.viewer) {
+      console.warn('CesiumService: Cannot set satellite position, viewer not initialized');
+      return null;
+    }
+
+    // Check if entity already exists
+    let entity = this.satelliteEntities.get(id);
+
+    if (entity) {
+      // Update existing entity position
+      entity.position = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+    } else {
+      // Create new satellite entity
+      entity = this.viewer.entities.add({
+        id: `satellite-${id}`,
+        name: `Satellite ${id}`,
+        position: Cesium.Cartesian3.fromDegrees(lon, lat, alt),
+        point: {
+          pixelSize: 10,
+          color: Cesium.Color.CYAN,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2
+        },
+        label: {
+          text: id,
+          font: '14px sans-serif',
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -15)
+        }
+      });
+
+      this.satelliteEntities.set(id, entity);
+      console.log(`CesiumService: Created satellite entity ${id} at lat=${lat}, lon=${lon}, alt=${alt}`);
+    }
+
+    // Request render since we're using requestRenderMode
+    this.requestRender();
+
+    return entity;
+  }
+
+  /**
+   * Remove a satellite entity by ID
+   * @param {string} id - Unique identifier for the satellite
+   */
+  removeSatellite(id) {
+    const entity = this.satelliteEntities.get(id);
+    if (entity) {
+      this.removeEntity(entity);
+      this.satelliteEntities.delete(id);
+      console.log(`CesiumService: Removed satellite entity ${id}`);
+      this.requestRender();
     }
   }
 
