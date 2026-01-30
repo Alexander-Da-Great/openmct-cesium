@@ -9,7 +9,7 @@ export default function CesiumPlugin() {
   return function install(openmct) {
     // Register the Cesium object view provider
     openmct.objectViews.addProvider({
-      key: 'cesium-viewer',
+      key: 'cesium-3d',
       name: 'Earth View',
       cssClass: 'icon-globe',
 
@@ -21,7 +21,16 @@ export default function CesiumPlugin() {
        * @returns {boolean} True if this view can display the object
        */
       canView(domainObject) {
-        return domainObject.type === 'satellite';
+        return domainObject && domainObject.type === 'satellite';
+      },
+
+      /**
+       * Determine if this view can be used in edit mode (e.g., in Display Layouts)
+       * @param {Object} domainObject - The Open MCT domain object
+       * @returns {boolean} True if this view can be edited
+       */
+      canEdit(domainObject) {
+        return domainObject && domainObject.type === 'satellite';
       },
 
       /**
@@ -31,7 +40,7 @@ export default function CesiumPlugin() {
        * @param {Array} objectPath - The path to this object in the navigation tree
        * @returns {Object} View object with show, destroy, and getViewContext methods
        */
-      view(domainObject, objectPath) {
+      view(domainObject) {
         let vueApp = null;
         let container = null;
 
@@ -75,19 +84,17 @@ export default function CesiumPlugin() {
            */
           getViewContext() {
             return {
-              type: 'cesium-viewer'
+              type: 'cesium-3d'
             };
           }
         };
       },
 
       /**
-       * Priority for this view provider (higher = more preferred)
-       * Set to 100 to make it default for objects it can view
+       * Priority for this view provider
+       * Lower number = higher priority in Display Layout dropdowns
        */
-      priority() {
-        return 100;
-      }
+      priority: 1
     });
 
     console.log('CesiumPlugin: Installed successfully');

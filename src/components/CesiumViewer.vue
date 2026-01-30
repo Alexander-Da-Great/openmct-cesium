@@ -34,8 +34,14 @@ export default {
           console.log('CesiumViewer: Viewer mounted and initialized');
 
           // If we have a satellite domain object, visualize it
-          if (props.domainObject && props.domainObject.type === 'satellite' && openmct) {
+          if (props.domainObject && props.domainObject.type === 'satellite') {
             const satelliteId = props.domainObject.identifier.key;
+
+            if (!openmct) {
+              console.warn('CesiumViewer: OpenMCT instance not available, cannot subscribe to telemetry');
+              return;
+            }
+
             console.log(`CesiumViewer: Setting up telemetry subscription for ${satelliteId}`);
 
             // Subscribe to telemetry updates
