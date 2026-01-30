@@ -1,0 +1,37 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Vite/Build artifacts
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# Development/System files
+.DS_Store
+thumbs.db
+desktop.ini
+*.log
+
+# Environment variables (Crucial for JPL/Cesium tokens)
+.env
+.env.local
+.env.*.local
+
+# Editor folders
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing
+/coverage
+/.nyc_output
+
+# Documentation / Telemetry temp files
+telemetry-data/*.json
+!telemetry-data/schema.json

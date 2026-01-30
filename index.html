@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenMCT Cesium Plugin - Test Harness</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #openmct {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="openmct"></div>
+
+    <script type="module">
+        import openmct from 'openmct';
+        import CesiumPlugin from './src/index.js';
+
+        // Create and configure OpenMCT instance
+        const app = openmct();
+
+        // Install the Cesium plugin
+        app.install(CesiumPlugin());
+
+        // Create a simple root object for testing
+        const rootObject = {
+            identifier: {
+                namespace: 'test',
+                key: 'root'
+            },
+            name: 'Test Root',
+            type: 'folder',
+            composition: []
+        };
+
+        // Add a test object provider
+        app.objects.addProvider('test', {
+            get(identifier) {
+                if (identifier.key === 'root') {
+                    return Promise.resolve(rootObject);
+                }
+                // Return a test satellite object
+                return Promise.resolve({
+                    identifier: identifier,
+                    name: 'Test Satellite',
+                    type: 'satellite'
+                });
+            }
+        });
+
+        // Add root to tree
+        app.objects.addRoot(rootObject.identifier);
+
+        // Start OpenMCT
+        app.start(document.getElementById('openmct'));
+
+        console.log('OpenMCT started with Cesium plugin');
+    </script>
+</body>
+</html>

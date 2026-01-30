@@ -1,0 +1,30 @@
+{
+  "name": "openmct-cesium",
+  "version": "1.0.0",
+  "description": "Open MCT 3D visualization plugin using Cesium",
+  "type": "module",
+  "main": "dist/openmct-cesium.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cesium": "latest",
+    "openmct": "latest",
+    "vue": "^3.4.24"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.0",
+    "vite-plugin-static-copy": "^2.2.0"
+  },
+  "keywords": [
+    "openmct",
+    "cesium",
+    "3d",
+    "visualization"
+  ],
+  "author": "",
+  "license": "ISC"
+}
