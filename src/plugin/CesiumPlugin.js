@@ -15,17 +15,13 @@ export default function CesiumPlugin() {
 
       /**
        * Determine if this view can display the given domain object
-       * For now, returns true for all objects to immediately see the globe
+       * Only show the Cesium Earth View for satellite objects
        *
        * @param {Object} domainObject - The Open MCT domain object
        * @returns {boolean} True if this view can display the object
        */
       canView(domainObject) {
-        // TODO: Later, restrict this to specific types like 'satellite'
-        // return domainObject.type === 'satellite';
-
-        // For now, show the globe for all objects
-        return true;
+        return domainObject.type === 'satellite';
       },
 
       /**
@@ -54,6 +50,9 @@ export default function CesiumPlugin() {
                 // Pass any Cesium-specific options here
               }
             });
+
+            // Provide openmct instance to Vue components
+            vueApp.provide('openmct', openmct);
 
             // Mount the Vue app to the container
             vueApp.mount(container);

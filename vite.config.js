@@ -23,6 +23,10 @@ export default defineConfig({
         {
           src: 'node_modules/cesium/Build/Cesium/ThirdParty/*',
           dest: 'ThirdParty'
+        },
+        {
+          src: 'node_modules/openmct/dist/fonts/*',
+          dest: 'fonts'
         }
       ]
     })

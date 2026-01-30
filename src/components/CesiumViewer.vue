@@ -3,7 +3,7 @@
 </template>
 
 <script>
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { onMounted, onBeforeUnmount, ref, inject } from 'vue';
 import CesiumService from '../services/CesiumService.js';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 
@@ -23,12 +23,8 @@ export default {
   },
   setup(props) {
     const cesiumContainer = ref(null);
-    let telemetryInterval = null;
-    let currentPosition = {
-      lat: 0,
-      lon: 0,
-      alt: 400000 // 400km altitude (typical LEO satellite)
-    };
+    const openmct = inject('openmct');
+    let telemetryUnsubscribe = null;
 
     onMounted(() => {
       if (cesiumContainer.value) {
@@ -38,28 +34,27 @@ export default {
           console.log('CesiumViewer: Viewer mounted and initialized');
 
           // If we have a satellite domain object, visualize it
-          if (props.domainObject && props.domainObject.type === 'satellite') {
+          if (props.domainObject && props.domainObject.type === 'satellite' && openmct) {
             const satelliteId = props.domainObject.identifier.key;
+            console.log(`CesiumViewer: Setting up telemetry subscription for ${satelliteId}`);
 
-            // Set initial position
-            CesiumService.setSatellitePosition(satelliteId, currentPosition);
-            console.log(`CesiumViewer: Initialized satellite ${satelliteId}`);
+            // Subscribe to telemetry updates
+            telemetryUnsubscribe = openmct.telemetry.subscribe(
+              props.domainObject,
+              (telemetryPoint) => {
+                // Extract position from telemetry
+                const position = {
+                  lat: telemetryPoint['position.latitude'],
+                  lon: telemetryPoint['position.longitude'],
+                  alt: telemetryPoint['position.altitude']
+                };
 
-            // Mock telemetry: Update position every second
-            // Increment longitude to simulate orbital motion
-            telemetryInterval = setInterval(() => {
-              currentPosition.lon += 1.5; // Move 1.5 degrees east per second
-
-              // Wrap longitude at 180/-180
-              if (currentPosition.lon > 180) {
-                currentPosition.lon -= 360;
+                // Update satellite position on globe
+                CesiumService.setSatellitePosition(satelliteId, position);
               }
+            );
 
-              // Update satellite position
-              CesiumService.setSatellitePosition(satelliteId, currentPosition);
-            }, 1000); // Update every 1 second
-
-            console.log('CesiumViewer: Mock telemetry started');
+            console.log(`CesiumViewer: Telemetry subscription active for ${satelliteId}`);
           }
         } catch (error) {
           console.error('CesiumViewer: Failed to initialize viewer', error);
@@ -68,11 +63,11 @@ export default {
     });
 
     onBeforeUnmount(() => {
-      // Stop telemetry updates
-      if (telemetryInterval) {
-        clearInterval(telemetryInterval);
-        telemetryInterval = null;
-        console.log('CesiumViewer: Mock telemetry stopped');
+      // Unsubscribe from telemetry
+      if (telemetryUnsubscribe) {
+        telemetryUnsubscribe();
+        telemetryUnsubscribe = null;
+        console.log('CesiumViewer: Telemetry unsubscribed');
       }
 
       // Remove satellite entity if it exists

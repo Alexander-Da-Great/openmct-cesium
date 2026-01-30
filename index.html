@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenMCT Cesium Plugin - Test Harness</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="/snowTheme.css">
     <style>
         body, html {
@@ -26,6 +27,7 @@
     <script type="module">
         import * as openmctModule from 'openmct';
         import CesiumPlugin from './src/index.js';
+        import TelemetryPlugin from '../openmct-3d-telemetry/src/index.js';
 
         // Wait for DOM and CSS to be ready
         window.addEventListener('load', () => {
@@ -67,12 +69,16 @@
             }
 
             // Set asset path for OpenMCT icons and resources
-            app.setAssetPath('/node_modules/openmct/dist');
+            // Point to root since we're copying assets to public/
+            app.setAssetPath('/');
 
             // Install default plugins that OpenMCT needs
             app.install(app.plugins.LocalStorage());
             app.install(app.plugins.MyItems());
             app.install(app.plugins.UTCTimeSystem());
+
+            // Install the telemetry plugin
+            app.install(TelemetryPlugin());
 
             // Install the Cesium plugin
             app.install(CesiumPlugin());
