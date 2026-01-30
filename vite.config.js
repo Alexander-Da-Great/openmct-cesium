@@ -29,7 +29,8 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': resolve(__dirname, './src')
+      '@': resolve(__dirname, './src'),
+      'openmct': resolve(__dirname, './node_modules/openmct/dist/openmct.js')
     }
   },
   define: {
@@ -54,6 +55,9 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    open: true
+    open: true,
+    fs: {
+      allow: ['..']
+    }
   }
 });
