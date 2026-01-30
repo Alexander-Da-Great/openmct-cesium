@@ -10,6 +10,7 @@ class CesiumService {
     this.viewer = null;
     this.container = null;
     this.satelliteEntities = new Map(); // Track satellite entities by ID
+    this.trajectoryEntities = new Map(); // Track trajectory polylines by ID
   }
 
   /**
@@ -28,8 +29,8 @@ class CesiumService {
 
     // Default Cesium viewer configuration
     const defaultOptions = {
-      animation: false,
-      timeline: false,
+      animation: true, // Enable animation widget for playback control
+      timeline: true, // Enable timeline widget for scrubbing
       baseLayerPicker: true,
       geocoder: true,
       homeButton: true,
@@ -39,8 +40,7 @@ class CesiumService {
       vrButton: false,
       selectionIndicator: true,
       infoBox: true,
-      requestRenderMode: true, // Optimize rendering - only render when needed
-      maximumRenderTimeChange: Infinity, // Prevent automatic rendering
+      requestRenderMode: false, // Disable for smooth animation playback
       ...options
     };
 
@@ -186,6 +186,148 @@ class CesiumService {
   }
 
   /**
+   * Set satellite trajectory using historical telemetry data
+   * Uses SampledPositionProperty for smooth interpolation during playback
+   * @param {string} id - Unique identifier for the satellite
+   * @param {Array} telemetryData - Array of telemetry points with timestamp, lat, lon, alt
+   */
+  setSatelliteTrajectory(id, telemetryData) {
+    if (!this.viewer) {
+      console.warn('CesiumService: Cannot set trajectory, viewer not initialized');
+      return;
+    }
+
+    if (!telemetryData || telemetryData.length === 0) {
+      console.warn('CesiumService: No telemetry data provided for trajectory');
+      return;
+    }
+
+    // Create a SampledPositionProperty for smooth interpolation
+    const positionProperty = new Cesium.SampledPositionProperty();
+
+    // Set forward and backward extrapolation to HOLD so satellite stays visible at data edges
+    positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
+    positionProperty.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
+
+    // Add all positions to the sampled property
+    telemetryData.forEach(point => {
+      const time = Cesium.JulianDate.fromDate(new Date(point.timestamp));
+      const position = Cesium.Cartesian3.fromDegrees(
+        point['position.longitude'],
+        point['position.latitude'],
+        point['position.altitude']
+      );
+      positionProperty.addSample(time, position);
+    });
+
+    // Set interpolation options for smooth movement
+    positionProperty.setInterpolationOptions({
+      interpolationDegree: 5,
+      interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
+    });
+
+    // Update or create the satellite entity with the sampled position
+    let entity = this.satelliteEntities.get(id);
+
+    // Log data range for debugging
+    const dataStart = telemetryData[0].timestamp;
+    const dataEnd = telemetryData[telemetryData.length - 1].timestamp;
+    console.log(`CesiumService: Setting trajectory with data range:`, {
+      start: new Date(dataStart).toISOString(),
+      end: new Date(dataEnd).toISOString(),
+      startMs: dataStart,
+      endMs: dataEnd,
+      numPoints: telemetryData.length
+    });
+
+    if (entity) {
+      // Update existing entity
+      entity.position = positionProperty;
+      // Remove availability restriction - satellite should always be visible with extrapolation
+      entity.availability = undefined;
+      console.log(`CesiumService: Updated existing entity ${id}, removed availability restrictions`);
+    } else {
+      // Create new entity with sampled position
+      // NOTE: No availability property - entity is always available, position uses extrapolation
+      entity = this.viewer.entities.add({
+        id: `satellite-${id}`,
+        name: `Satellite ${id}`,
+        position: positionProperty,
+        // availability omitted - entity always visible
+        point: {
+          pixelSize: 10,
+          color: Cesium.Color.CYAN,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2
+        },
+        label: {
+          text: id,
+          font: '14px sans-serif',
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -15)
+        }
+      });
+
+      this.satelliteEntities.set(id, entity);
+      console.log(`CesiumService: Created new entity ${id}, always available`);
+    }
+
+    // Create or update the trajectory path visualization
+    this.setTrajectoryPath(id, telemetryData);
+
+    console.log(`CesiumService: Set trajectory for ${id} with ${telemetryData.length} points`);
+    this.requestRender();
+  }
+
+  /**
+   * Create a visual trajectory path (polyline) for the satellite
+   * @param {string} id - Unique identifier for the satellite
+   * @param {Array} telemetryData - Array of telemetry points
+   */
+  setTrajectoryPath(id, telemetryData) {
+    if (!this.viewer) {
+      return;
+    }
+
+    // Remove existing trajectory if present
+    const existingTrajectory = this.trajectoryEntities.get(id);
+    if (existingTrajectory) {
+      this.viewer.entities.remove(existingTrajectory);
+    }
+
+    // Build an array of positions for the polyline
+    const positions = telemetryData.map(point =>
+      Cesium.Cartesian3.fromDegrees(
+        point['position.longitude'],
+        point['position.latitude'],
+        point['position.altitude']
+      )
+    );
+
+    // Create polyline entity for the trajectory
+    const trajectoryEntity = this.viewer.entities.add({
+      id: `trajectory-${id}`,
+      name: `${id} Trajectory`,
+      polyline: {
+        positions: positions,
+        width: 2,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          glowPower: 0.2,
+          color: Cesium.Color.CYAN.withAlpha(0.7)
+        }),
+        clampToGround: false
+      }
+    });
+
+    this.trajectoryEntities.set(id, trajectoryEntity);
+    console.log(`CesiumService: Created trajectory path for ${id}`);
+  }
+
+  /**
    * Remove a satellite entity by ID
    * @param {string} id - Unique identifier for the satellite
    */
@@ -196,6 +338,14 @@ class CesiumService {
       this.satelliteEntities.delete(id);
       console.log(`CesiumService: Removed satellite entity ${id}`);
       this.requestRender();
+    }
+
+    // Also remove trajectory if present
+    const trajectory = this.trajectoryEntities.get(id);
+    if (trajectory) {
+      this.viewer.entities.remove(trajectory);
+      this.trajectoryEntities.delete(id);
+      console.log(`CesiumService: Removed trajectory for ${id}`);
     }
   }
 
