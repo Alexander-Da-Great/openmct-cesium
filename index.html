@@ -3,25 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Open MCT Cesium - Unified Test Harness</title>
+    <title>Open MCT Cesium</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="/snowTheme.css">
+    
+    <script src="/openmct.js"></script>
+
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #eee; }
         #openmct { width: 100%; height: 100%; }
+        .cesium-widget-credits {
+            display: none !important;
+        }
     </style>
 </head>
 <body class="user-helper">
     <div id="openmct"></div>
 
     <script type="module">
-        import openmct from 'openmct';
         import CesiumPlugin from './src/plugin/CesiumPlugin.js';
 
-        // 1. Set Asset Path - Required for Workers to load correctly
+        // 1. Bulletproof initialization logic
+        let openmct;
+        if (typeof window.openmct === 'function') {
+            openmct = window.openmct();
+        } else {
+            openmct = window.openmct;
+        }
+
         openmct.setAssetPath('/');
 
-        // 2. Install Essential Plugins
         openmct.install(openmct.plugins.LocalStorage());
         openmct.install(openmct.plugins.MyItems());
         openmct.install(openmct.plugins.UTCTimeSystem());
@@ -42,32 +53,32 @@
             ]
         }));
 
-        // 3. Install the Cesium Plugin
         openmct.install(CesiumPlugin());
 
-        // 4. Fully Defined Satellite Object (fixes the addEventListener crash)
-        const satelliteMetadata = {
-            values: [
-                { key: 'utc', name: 'Time', format: 'utc', hints: { domain: 1 } },
-                { key: 'position.latitude', name: 'Lat', format: 'float', units: 'deg', hints: { range: 1 } },
-                { key: 'position.longitude', name: 'Lon', format: 'float', units: 'deg', hints: { range: 2 } },
-                { key: 'position.altitude', name: 'Alt', format: 'float', units: 'm', hints: { range: 3 } }
-            ]
-        };
+        // --- Standard Object Definitions ---
+        const satelliteIdentifier = { namespace: 'test', key: 'sat-1' };
+        const globeIdentifier = { namespace: 'test', key: 'globe-1' };
 
         const satelliteObject = {
-            identifier: { namespace: 'test', key: 'sat-1' },
+            identifier: satelliteIdentifier,
             name: 'ISS (Mock)',
             type: 'satellite',
-            telemetry: satelliteMetadata,
+            telemetry: {
+                values: [
+                    { key: 'utc', name: 'Time', format: 'utc', hints: { domain: 1 } },
+                    { key: 'position.latitude', name: 'Lat', format: 'float', units: 'deg', hints: { range: 1 } },
+                    { key: 'position.longitude', name: 'Lon', format: 'float', units: 'deg', hints: { range: 2 } },
+                    { key: 'position.altitude', name: 'Alt', format: 'float', units: 'm', hints: { range: 3 } }
+                ]
+            },
             location: 'test:root'
         };
 
         const globeObject = {
-            identifier: { namespace: 'test', key: 'globe-1' },
+            identifier: globeIdentifier,
             name: 'Master Earth View',
             type: 'cesium.globe',
-            composition: [ { namespace: 'test', key: 'sat-1' } ],
+            composition: [ satelliteIdentifier ],
             location: 'test:root'
         };
 
@@ -75,18 +86,15 @@
             identifier: { namespace: 'test', key: 'root' },
             name: 'Mission Overview',
             type: 'folder',
-            composition: [ 
-                { namespace: 'test', key: 'globe-1' },
-                { namespace: 'test', key: 'sat-1' }
-            ],
+            composition: [ globeIdentifier, satelliteIdentifier ],
             location: 'ROOT'
         };
 
-        // 5. Mock Telemetry Provider
+        // --- Providers ---
         openmct.telemetry.addProvider({
-            supportsSubscribe: (domainObject) => domainObject.type === 'satellite',
-            supportsRequest: (domainObject) => domainObject.type === 'satellite',
-            subscribe: (domainObject, callback) => {
+            supportsSubscribe: (obj) => obj.type === 'satellite',
+            supportsRequest: (obj) => obj.type === 'satellite',
+            subscribe: (obj, callback) => {
                 const interval = setInterval(() => {
                     const now = Date.now();
                     callback({
@@ -98,33 +106,29 @@
                 }, 1000);
                 return () => clearInterval(interval);
             },
-            request: async (domainObject, options) => {
+            request: async (obj, opt) => {
                 let data = [];
-                for (let t = options.start; t < options.end; t += 10000) {
+                for (let t = opt.start; t < opt.end; t += 10000) {
                     data.push({
-                        utc: t,
-                        'position.latitude': Math.sin(t / 10000) * 45,
-                        'position.longitude': (t / 500) % 360 - 180,
-                        'position.altitude': 400000
+                        utc: t, 'position.latitude': Math.sin(t / 10000) * 45,
+                        'position.longitude': (t / 500) % 360 - 180, 'position.altitude': 400000
                     });
                 }
                 return data;
             }
         });
 
-        // 6. Object Provider
         openmct.objects.addProvider('test', {
             get: (identifier) => {
                 if (identifier.key === 'root') return Promise.resolve(rootObject);
                 if (identifier.key === 'globe-1') return Promise.resolve(globeObject);
                 if (identifier.key === 'sat-1') return Promise.resolve(satelliteObject);
-                return Promise.reject(new Error("Object not found"));
+                return Promise.reject("Object not found");
             }
         });
 
         openmct.objects.addRoot({ namespace: 'test', key: 'root' });
-
-        openmct.start();
+        openmct.start(document.getElementById('openmct'));
     </script>
 </body>
 </html>

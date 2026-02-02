@@ -5,6 +5,7 @@
 <script setup>
 import { onMounted, onBeforeUnmount, ref, inject } from 'vue';
 import CesiumService from '../services/CesiumService.js';
+import 'cesium/Build/Cesium/Widgets/widgets.css'; 
 
 const props = defineProps(['domainObject']);
 const openmct = inject('openmct');
@@ -18,8 +19,6 @@ onMounted(() => {
     
     const onAdd = (child) => {
         const id = openmct.objects.makeKeyString(child.identifier);
-        
-        // Only track if it's a satellite or has position telemetry
         CesiumService.addSatellite(child, openmct);
 
         const unsub = openmct.telemetry.subscribe(child, (datum) => {
@@ -49,6 +48,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.cesium-viewer-container { width: 100%; height: 100%; position: relative; }
-:deep(.cesium-viewer) { width: 100%; height: 100%; }
+.cesium-viewer-container {
+    width: 100%;
+    height: 100%;
+    position: absolute; /* Changed from relative to absolute to fill the frame */
+    top: 0;
+    left: 0;
+    background: #000;
+}
+:deep(.cesium-viewer) {
+    width: 100%;
+    height: 100%;
+}
 </style>
