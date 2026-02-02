@@ -4,6 +4,8 @@ class CesiumService {
     constructor() {
         this.viewer = null;
         this.entitiesMap = new Map();
+        this.stopTick = () => {};
+        this.stopBounds = () => {};
     }
 
     init(container, openmct) {
@@ -15,10 +17,11 @@ class CesiumService {
             requestRenderMode: true,
             sceneModePicker: true,
             baseLayerPicker: true,
-            navigationHelpButton: false
+            navigationHelpButton: false,
+            infoBox: false,
+            creditContainer: document.createElement("div")
         });
 
-        // Sync Clock to Open MCT
         this.stopTick = openmct.time.on('tick', (timestamp) => {
             if (this.viewer) {
                 this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(timestamp));
@@ -34,13 +37,38 @@ class CesiumService {
         });
     }
 
+    // Follow Logic (Persistent Lock)
+    trackEntity(id) {
+        if (!this.viewer) return;
+        const entity = this.viewer.entities.getById(id);
+        if (entity) {
+            this.viewer.trackedEntity = entity;
+            this.viewer.scene.requestRender();
+        }
+    }
+
+    // Jump Logic (One-time flight)
+    flyToEntity(id) {
+        if (!this.viewer) return;
+        
+        // CRITICAL FIX: Unlock the camera before jumping
+        this.viewer.trackedEntity = undefined; 
+        
+        const entity = this.viewer.entities.getById(id);
+        if (entity) {
+            this.viewer.flyTo(entity, {
+                offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-45), 1500000),
+                duration: 2.0
+            });
+        }
+    }
+
     async addSatellite(child, openmct) {
         const id = openmct.objects.makeKeyString(child.identifier);
         const bounds = openmct.time.getBounds();
-        
-        // Fetch history to populate the path
         const history = await openmct.telemetry.request(child, bounds);
-        if (!history) return;
+        
+        if (!history || history.length === 0) return;
 
         const positionProperty = new Cesium.SampledPositionProperty();
         positionProperty.setInterpolationOptions({
@@ -50,11 +78,7 @@ class CesiumService {
 
         history.forEach(p => {
             const time = Cesium.JulianDate.fromDate(new Date(p.utc));
-            const pos = Cesium.Cartesian3.fromDegrees(
-                p['position.longitude'], 
-                p['position.latitude'], 
-                p['position.altitude']
-            );
+            const pos = Cesium.Cartesian3.fromDegrees(p['position.longitude'], p['position.latitude'], p['position.altitude']);
             positionProperty.addSample(time, pos);
         });
 
@@ -62,6 +86,8 @@ class CesiumService {
             id: id,
             name: child.name,
             position: positionProperty,
+            // Default POV when tracked
+            viewFrom: new Cesium.Cartesian3(-10000.0, -10000.0, 5000.0), 
             point: { pixelSize: 10, color: Cesium.Color.CYAN, outlineWidth: 2 },
             label: {
                 text: child.name,
@@ -73,10 +99,7 @@ class CesiumService {
             },
             path: {
                 resolution: 1,
-                material: new Cesium.PolylineGlowMaterialProperty({
-                    glowPower: 0.1,
-                    color: Cesium.Color.CYAN
-                }),
+                material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
                 width: 3
             }
         });
@@ -89,25 +112,20 @@ class CesiumService {
         const property = this.entitiesMap.get(id);
         if (property) {
             const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
-            const pos = Cesium.Cartesian3.fromDegrees(
-                datum['position.longitude'], 
-                datum['position.latitude'], 
-                datum['position.altitude']
-            );
+            const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
             property.addSample(time, pos);
+            if (this.viewer) this.viewer.scene.requestRender();
         }
     }
 
     removeSatellite(id) {
-        if (this.viewer) {
-            this.viewer.entities.removeById(id);
-        }
+        if (this.viewer) this.viewer.entities.removeById(id);
         this.entitiesMap.delete(id);
     }
 
     destroy() {
-        if (this.stopTick) this.stopTick();
-        if (this.stopBounds) this.stopBounds();
+        if (typeof this.stopTick === 'function') this.stopTick();
+        if (typeof this.stopBounds === 'function') this.stopBounds();
         if (this.viewer) {
             this.viewer.destroy();
             this.viewer = null;

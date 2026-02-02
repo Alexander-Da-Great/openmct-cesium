@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Open MCT Cesium</title>
+    <title>Open MCT Cesium - Unified Test Harness</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="/snowTheme.css">
     
@@ -12,9 +12,6 @@
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #eee; }
         #openmct { width: 100%; height: 100%; }
-        .cesium-widget-credits {
-            display: none !important;
-        }
     </style>
 </head>
 <body class="user-helper">
@@ -23,7 +20,7 @@
     <script type="module">
         import CesiumPlugin from './src/plugin/CesiumPlugin.js';
 
-        // 1. Bulletproof initialization logic
+        // 1. Detect and Initialize OpenMCT
         let openmct;
         if (typeof window.openmct === 'function') {
             openmct = window.openmct();
@@ -31,8 +28,12 @@
             openmct = window.openmct;
         }
 
-        openmct.setAssetPath('/');
+        // 2. Fix for Workers: Use an absolute URL for the asset path
+        // This ensures background workers can find their script files reliably
+        const baseHref = window.location.origin + window.location.pathname.split('/').slice(0, -1).join('/') + '/';
+        openmct.setAssetPath(baseHref);
 
+        // 3. Install Standard Plugins
         openmct.install(openmct.plugins.LocalStorage());
         openmct.install(openmct.plugins.MyItems());
         openmct.install(openmct.plugins.UTCTimeSystem());
@@ -53,9 +54,10 @@
             ]
         }));
 
+        // 4. Install Cesium Plugin
         openmct.install(CesiumPlugin());
 
-        // --- Standard Object Definitions ---
+        // 5. Data Structures
         const satelliteIdentifier = { namespace: 'test', key: 'sat-1' };
         const globeIdentifier = { namespace: 'test', key: 'globe-1' };
 
@@ -90,7 +92,7 @@
             location: 'ROOT'
         };
 
-        // --- Providers ---
+        // 6. Telemetry and Object Providers
         openmct.telemetry.addProvider({
             supportsSubscribe: (obj) => obj.type === 'satellite',
             supportsRequest: (obj) => obj.type === 'satellite',
@@ -128,6 +130,8 @@
         });
 
         openmct.objects.addRoot({ namespace: 'test', key: 'root' });
+
+        // 7. Start App
         openmct.start(document.getElementById('openmct'));
     </script>
 </body>
