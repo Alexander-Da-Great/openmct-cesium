@@ -3,84 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Open MCT Cesium - Unified Test Harness</title>
+    <title>Open MCT Cesium - Mission Ops</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="/snowTheme.css">
-    
     <script src="/openmct.js"></script>
-
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #eee; }
         #openmct { width: 100%; height: 100%; }
+        .cesium-widget-credits { display: none !important; }
     </style>
 </head>
 <body class="user-helper">
     <div id="openmct"></div>
-
     <script type="module">
         import CesiumPlugin from './src/plugin/CesiumPlugin.js';
 
-        // 1. Detect and Initialize OpenMCT
-        let openmct;
-        if (typeof window.openmct === 'function') {
-            openmct = window.openmct();
-        } else {
-            openmct = window.openmct;
-        }
-
-        // 2. Fix for Workers: Use an absolute URL for the asset path
-        // This ensures background workers can find their script files reliably
+        const openmct = typeof window.openmct === 'function' ? window.openmct() : window.openmct;
         const baseHref = window.location.origin + window.location.pathname.split('/').slice(0, -1).join('/') + '/';
         openmct.setAssetPath(baseHref);
 
-        // 3. Install Standard Plugins
         openmct.install(openmct.plugins.LocalStorage());
         openmct.install(openmct.plugins.MyItems());
         openmct.install(openmct.plugins.UTCTimeSystem());
-        
         openmct.install(openmct.plugins.Conductor({
             menuOptions: [
-                {
-                    name: "Fixed",
-                    timeSystem: "utc",
-                    bounds: { start: Date.now() - 900000, end: Date.now() }
-                },
-                {
-                    name: "Realtime",
-                    timeSystem: "utc",
-                    clock: "local",
-                    clockOffsets: { start: -900000, end: 30000 }
-                }
+                { name: "Fixed", timeSystem: "utc", bounds: { start: Date.now() - 3600000, end: Date.now() } },
+                { name: "Realtime", timeSystem: "utc", clock: "local", clockOffsets: { start: -900000, end: 30000 } }
             ]
         }));
 
-        // 4. Install Cesium Plugin
         openmct.install(CesiumPlugin());
 
-        // 5. Data Structures
-        const satelliteIdentifier = { namespace: 'test', key: 'sat-1' };
-        const globeIdentifier = { namespace: 'test', key: 'globe-1' };
-
         const satelliteObject = {
-            identifier: satelliteIdentifier,
+            identifier: { namespace: 'test', key: 'sat-1' },
             name: 'ISS (Mock)',
             type: 'satellite',
+            modelUrl: '/Satellite.glb',
+            modelScale: 2.0,
+            sensorFov: 35,
+            sensorRange: 800000,
             telemetry: {
                 values: [
                     { key: 'utc', name: 'Time', format: 'utc', hints: { domain: 1 } },
                     { key: 'position.latitude', name: 'Lat', format: 'float', units: 'deg', hints: { range: 1 } },
                     { key: 'position.longitude', name: 'Lon', format: 'float', units: 'deg', hints: { range: 2 } },
-                    { key: 'position.altitude', name: 'Alt', format: 'float', units: 'm', hints: { range: 3 } }
+                    { key: 'position.altitude', name: 'Alt', format: 'float', units: 'm', hints: { range: 3 } },
+                    { key: 'attitude.roll', name: 'Roll', format: 'float', units: 'deg' },
+                    { key: 'attitude.pitch', name: 'Pitch', format: 'float', units: 'deg' },
+                    { key: 'attitude.heading', name: 'Heading', format: 'float', units: 'deg' }
                 ]
             },
             location: 'test:root'
         };
 
         const globeObject = {
-            identifier: globeIdentifier,
+            identifier: { namespace: 'test', key: 'globe-1' },
             name: 'Master Earth View',
             type: 'cesium.globe',
-            composition: [ satelliteIdentifier ],
+            composition: [{ namespace: 'test', key: 'sat-1' }],
             location: 'test:root'
         };
 
@@ -88,37 +68,34 @@
             identifier: { namespace: 'test', key: 'root' },
             name: 'Mission Overview',
             type: 'folder',
-            composition: [ globeIdentifier, satelliteIdentifier ],
+            composition: [{ namespace: 'test', key: 'globe-1' }, { namespace: 'test', key: 'sat-1' }],
             location: 'ROOT'
         };
 
-        // 6. Telemetry and Object Providers
-       openmct.telemetry.addProvider({
+        openmct.telemetry.addProvider({
             supportsSubscribe: (obj) => obj.type === 'satellite',
             supportsRequest: (obj) => obj.type === 'satellite',
             subscribe: (obj, callback) => {
-                const interval = setInterval(() => {
-                    callback(generateMockPoint(Date.now()));
-                }, 1000);
+                const interval = setInterval(() => callback(generateMockPoint(Date.now())), 1000);
                 return () => clearInterval(interval);
             },
             request: async (obj, opt) => {
                 let data = [];
-                // High-resolution history: 1 point per second
-                for (let t = opt.start; t < opt.end; t += 1000) {
-                    data.push(generateMockPoint(t));
-                }
+                for (let t = opt.start; t < opt.end; t += 1000) { data.push(generateMockPoint(t)); }
                 return data;
             }
         });
 
         function generateMockPoint(t) {
+            const seconds = t / 1000;
             return {
                 utc: t,
-                // Slower orbital math for a more realistic drift
-                'position.latitude': Math.sin(t / 40000) * 45, 
-                'position.longitude': (t / 2000) % 360 - 180,
-                'position.altitude': 400000
+                'position.latitude': Math.sin(seconds / 200) * 45, 
+                'position.longitude': (seconds / 10) % 360 - 180,
+                'position.altitude': 400000,
+                'attitude.roll': Math.sin(seconds / 5) * 10,
+                'attitude.pitch': Math.cos(seconds / 7) * 10,
+                'attitude.heading': (seconds * 2) % 360
             };
         }
 
@@ -132,8 +109,6 @@
         });
 
         openmct.objects.addRoot({ namespace: 'test', key: 'root' });
-
-        // 7. Start App
         openmct.start(document.getElementById('openmct'));
     </script>
 </body>

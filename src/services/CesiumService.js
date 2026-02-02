@@ -4,7 +4,6 @@ class CesiumService {
     constructor() {
         this.viewer = null;
         this.entitiesMap = new Map();
-        this.stopTick = () => {};
         this.stopBounds = () => {};
     }
 
@@ -14,7 +13,7 @@ class CesiumService {
         this.viewer = new Cesium.Viewer(container, {
             animation: false,
             timeline: false,
-            requestRenderMode: false, // Must be false for 60fps smoothness
+            requestRenderMode: false, 
             sceneModePicker: true,
             baseLayerPicker: true,
             navigationHelpButton: false,
@@ -22,28 +21,140 @@ class CesiumService {
             creditContainer: document.createElement("div")
         });
 
-        // SMOOTHNESS CONFIG: 
-        // Let Cesium's clock advance based on the system time, 
-        // rather than snapping purely to Open MCT ticks.
-        this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK_MULTIPLIER;
-        this.viewer.clock.multiplier = 1.0;
+        this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK;
         this.viewer.clock.shouldAnimate = true;
 
-        // Synchronize initial time from Open MCT
-        const startTimestamp = openmct.time.getBounds().start;
-        this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(startTimestamp));
-
-        // When Open MCT bounds change (scrubbing), snap the Cesium clock
         this.stopBounds = openmct.time.on('bounds', (bounds) => {
-            if (this.viewer) {
-                this.viewer.clock.startTime = Cesium.JulianDate.fromDate(new Date(bounds.start));
-                this.viewer.clock.stopTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
-                // Only snap current time if we aren't in "real-time" mode to allow scrubbing
-                if (!openmct.time.isRealTime()) {
-                    this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(openmct.time.getBounds().end));
-                }
+            if (this.viewer && !openmct.time.isRealTime()) {
+                this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
             }
         });
+    }
+
+    getOrientation(datum) {
+        const position = Cesium.Cartesian3.fromDegrees(
+            datum['position.longitude'], 
+            datum['position.latitude'], 
+            datum['position.altitude']
+        );
+        const hpr = new Cesium.HeadingPitchRoll(
+            Cesium.Math.toRadians(datum['attitude.heading'] || 0),
+            Cesium.Math.toRadians(datum['attitude.pitch'] || 0),
+            Cesium.Math.toRadians(datum['attitude.roll'] || 0)
+        );
+        return Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+    }
+
+    async addSatellite(child, openmct) {
+        const id = openmct.objects.makeKeyString(child.identifier);
+        const bounds = openmct.time.getBounds();
+        const history = await openmct.telemetry.request(child, bounds);
+        
+        const positionProperty = new Cesium.SampledPositionProperty();
+        const orientationProperty = new Cesium.SampledProperty(Cesium.Quaternion);
+        
+        positionProperty.setInterpolationOptions({
+            interpolationDegree: 1,
+            interpolationAlgorithm: Cesium.LinearApproximation
+        });
+
+        orientationProperty.setInterpolationOptions({
+            interpolationDegree: 1,
+            interpolationAlgorithm: Cesium.LinearApproximation
+        });
+
+        positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
+        orientationProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
+
+        if (history && history.length > 0) {
+            history.forEach(p => {
+                const time = Cesium.JulianDate.fromDate(new Date(p.utc));
+                const pos = Cesium.Cartesian3.fromDegrees(p['position.longitude'], p['position.latitude'], p['position.altitude']);
+                positionProperty.addSample(time, pos);
+                orientationProperty.addSample(time, this.getOrientation(p));
+            });
+        }
+
+        // --- 1. Main Spacecraft Entity ---
+        const satellite = this.viewer.entities.add({
+            id: id,
+            name: child.name,
+            position: positionProperty,
+            orientation: orientationProperty,
+            model: {
+                uri: child.modelUrl || '/Satellite.glb',
+                scale: parseFloat(child.modelScale) || 1.0,
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 5000000.0)
+            },
+            point: {
+                pixelSize: 10,
+                color: Cesium.Color.CYAN,
+                outlineColor: Cesium.Color.WHITE,
+                outlineWidth: 2,
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(5000000.0, Number.MAX_VALUE)
+            },
+            label: {
+                text: child.name,
+                font: '12pt monospace',
+                pixelOffset: new Cesium.Cartesian2(0, -25),
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                outlineWidth: 2,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY 
+            },
+            path: {
+                resolution: 1,
+                material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
+                width: 3,
+                leadTime: 0, 
+                trailTime: 3600  
+            }
+        });
+
+        // --- 2. Sensor Cone Child Entity ---
+        const range = child.sensorRange || 1000000;
+        const fovRad = Cesium.Math.toRadians(child.sensorFov || 30);
+        const bottomRadius = Math.tan(fovRad / 2) * range;
+
+        this.viewer.entities.add({
+            parent: satellite,
+            // Offset logic: Move the cone center "forward" so the tip is at the satellite origin
+            position: new Cesium.CallbackProperty((time) => {
+                const pos = positionProperty.getValue(time);
+                const ori = orientationProperty.getValue(time);
+                if (!pos || !ori) return pos;
+
+                // Create a transformation matrix from orientation
+                const matrix = Cesium.Matrix3.fromQuaternion(ori);
+                // Get the 'Forward' vector (usually Z in GLB space)
+                const direction = Cesium.Matrix3.getColumn(matrix, 2, new Cesium.Cartesian3());
+                // Center of cylinder is half-range away from the satellite
+                const offset = Cesium.Cartesian3.multiplyByScalar(direction, range / 2, new Cesium.Cartesian3());
+                
+                return Cesium.Cartesian3.add(pos, offset, new Cesium.Cartesian3());
+            }, false),
+            orientation: orientationProperty,
+            cylinder: {
+                length: range,
+                topRadius: bottomRadius,
+                bottomRadius: 0.0,
+                material: Cesium.Color.CYAN.withAlpha(0.3),
+                outline: true,
+                outlineColor: Cesium.Color.CYAN.withAlpha(0.5)
+            }
+        });
+
+        this.entitiesMap.set(id, { positionProperty, orientationProperty });
+    }
+
+    updateSatellite(id, datum) {
+        const props = this.entitiesMap.get(id);
+        if (props) {
+            const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
+            const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
+            props.positionProperty.addSample(time, pos);
+            props.orientationProperty.addSample(time, this.getOrientation(datum));
+        }
     }
 
     resetView() {
@@ -78,62 +189,9 @@ class CesiumService {
         }
     }
 
-    async addSatellite(child, openmct) {
-        const id = openmct.objects.makeKeyString(child.identifier);
-        const bounds = openmct.time.getBounds();
-        const history = await openmct.telemetry.request(child, bounds);
-        
-        const positionProperty = new Cesium.SampledPositionProperty();
-        positionProperty.setInterpolationOptions({
-            interpolationDegree: 5,
-            interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
-        });
-
-        positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
-        positionProperty.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
-
-        if (history && history.length > 0) {
-            history.forEach(p => {
-                const time = Cesium.JulianDate.fromDate(new Date(p.utc));
-                const pos = Cesium.Cartesian3.fromDegrees(p['position.longitude'], p['position.latitude'], p['position.altitude']);
-                positionProperty.addSample(time, pos);
-            });
-        }
-
-        this.viewer.entities.add({
-            id: id,
-            name: child.name,
-            position: positionProperty,
-            viewFrom: new Cesium.Cartesian3(-10000.0, -10000.0, 5000.0), 
-            point: { pixelSize: 10, color: Cesium.Color.CYAN, outlineWidth: 2, outlineColor: Cesium.Color.WHITE },
-            label: {
-                text: child.name,
-                font: '12pt monospace',
-                pixelOffset: new Cesium.Cartesian2(0, -25),
-                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                outlineWidth: 2,
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY 
-            },
-            path: {
-                resolution: 1,
-                material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
-                width: 3,
-                leadTime: 3600, 
-                trailTime: 3600  
-            }
-        });
-
-        this.entitiesMap.set(id, positionProperty);
-    }
-
-    updateSatellite(id, datum) {
-        const property = this.entitiesMap.get(id);
-        if (property) {
-            const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
-            const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
-            property.addSample(time, pos);
-        }
+    removeSatellite(id) {
+        if (this.viewer) this.viewer.entities.removeById(id);
+        this.entitiesMap.delete(id);
     }
 
     destroy() {
