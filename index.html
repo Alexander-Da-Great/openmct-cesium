@@ -3,146 +3,128 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenMCT Cesium Plugin - Test Harness</title>
+    <title>Open MCT Cesium - Unified Test Harness</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="/snowTheme.css">
     <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            font-family: Arial, sans-serif;
-        }
-        #openmct {
-            width: 100%;
-            height: 100%;
-        }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        #openmct { width: 100%; height: 100%; }
     </style>
 </head>
-<body>
+<body class="user-helper">
     <div id="openmct"></div>
 
     <script type="module">
-        import * as openmctModule from 'openmct';
-        import CesiumPlugin from './src/index.js';
-        import TelemetryPlugin from '../openmct-3d-telemetry/src/index.js';
+        import openmct from 'openmct';
+        import CesiumPlugin from './src/plugin/CesiumPlugin.js';
 
-        // Wait for DOM and CSS to be ready
-        window.addEventListener('load', () => {
-            // Add required OpenMCT class before initialization
-            document.body.classList.add('user-helper');
+        // 1. Set Asset Path - Required for Workers to load correctly
+        openmct.setAssetPath('/');
 
-            // Get OpenMCT instance - it can be a constructor OR a pre-instantiated object
-            let app;
-
-            // Check if default export is a constructor function
-            if (typeof openmctModule.default === 'function') {
-                try {
-                    app = openmctModule.default();
-                } catch (e) {
-                    console.error('Failed to call default constructor:', e);
-                    return;
-                }
-            }
-            // Check if default export is already an instance (has OpenMCT methods)
-            else if (openmctModule.default && typeof openmctModule.default.install === 'function') {
-                app = openmctModule.default;
-            }
-            // Check if the module itself is a constructor
-            else if (typeof openmctModule === 'function') {
-                try {
-                    app = openmctModule();
-                } catch (e) {
-                    console.error('Failed to call module as constructor:', e);
-                    return;
-                }
-            }
-            // Maybe it's a global
-            else if (typeof window.openmct === 'function') {
-                app = window.openmct();
-            }
-            else {
-                console.error('Could not find OpenMCT constructor or instance', openmctModule);
-                return;
-            }
-
-            // Set asset path for OpenMCT icons and resources
-            // Point to root since we're copying assets to public/
-            app.setAssetPath('/');
-
-            // Install default plugins that OpenMCT needs
-            app.install(app.plugins.LocalStorage());
-            app.install(app.plugins.MyItems());
-            app.install(app.plugins.UTCTimeSystem());
-
-            // Install the telemetry plugin
-            app.install(TelemetryPlugin());
-
-            // Install the Cesium plugin
-            app.install(CesiumPlugin());
-
-            // Set up time conductor after plugins are installed
-            app.time.setClock('local');
-            const now = Date.now();
-            app.time.setTimeSystem('utc', {
-                start: now - 900000,  // 15 minutes ago
-                end: now
-            });
-
-            // Create test satellite objects
-            const testSatellite1 = {
-                identifier: {
-                    namespace: 'test',
-                    key: 'satellite-1'
+        // 2. Install Essential Plugins
+        openmct.install(openmct.plugins.LocalStorage());
+        openmct.install(openmct.plugins.MyItems());
+        openmct.install(openmct.plugins.UTCTimeSystem());
+        
+        openmct.install(openmct.plugins.Conductor({
+            menuOptions: [
+                {
+                    name: "Fixed",
+                    timeSystem: "utc",
+                    bounds: { start: Date.now() - 900000, end: Date.now() }
                 },
-                name: 'ISS',
-                type: 'satellite'
-            };
+                {
+                    name: "Realtime",
+                    timeSystem: "utc",
+                    clock: "local",
+                    clockOffsets: { start: -900000, end: 30000 }
+                }
+            ]
+        }));
 
-            // Create a simple root object for testing
-            const rootObject = {
-                identifier: {
-                    namespace: 'test',
-                    key: 'root'
-                },
-                name: 'Test Root',
-                type: 'folder',
-                composition: [
-                    testSatellite1.identifier
-                ]
-            };
+        // 3. Install the Cesium Plugin
+        openmct.install(CesiumPlugin());
 
-            // Add a test object provider
-            app.objects.addProvider('test', {
-                get(identifier) {
-                    if (identifier.key === 'root') {
-                        return Promise.resolve(rootObject);
-                    }
-                    if (identifier.key === 'satellite-1') {
-                        return Promise.resolve(testSatellite1);
-                    }
-                    // Return a generic test satellite object for any other request
-                    return Promise.resolve({
-                        identifier: identifier,
-                        name: 'Test Satellite',
-                        type: 'satellite'
+        // 4. Fully Defined Satellite Object (fixes the addEventListener crash)
+        const satelliteMetadata = {
+            values: [
+                { key: 'utc', name: 'Time', format: 'utc', hints: { domain: 1 } },
+                { key: 'position.latitude', name: 'Lat', format: 'float', units: 'deg', hints: { range: 1 } },
+                { key: 'position.longitude', name: 'Lon', format: 'float', units: 'deg', hints: { range: 2 } },
+                { key: 'position.altitude', name: 'Alt', format: 'float', units: 'm', hints: { range: 3 } }
+            ]
+        };
+
+        const satelliteObject = {
+            identifier: { namespace: 'test', key: 'sat-1' },
+            name: 'ISS (Mock)',
+            type: 'satellite',
+            telemetry: satelliteMetadata,
+            location: 'test:root'
+        };
+
+        const globeObject = {
+            identifier: { namespace: 'test', key: 'globe-1' },
+            name: 'Master Earth View',
+            type: 'cesium.globe',
+            composition: [ { namespace: 'test', key: 'sat-1' } ],
+            location: 'test:root'
+        };
+
+        const rootObject = {
+            identifier: { namespace: 'test', key: 'root' },
+            name: 'Mission Overview',
+            type: 'folder',
+            composition: [ 
+                { namespace: 'test', key: 'globe-1' },
+                { namespace: 'test', key: 'sat-1' }
+            ],
+            location: 'ROOT'
+        };
+
+        // 5. Mock Telemetry Provider
+        openmct.telemetry.addProvider({
+            supportsSubscribe: (domainObject) => domainObject.type === 'satellite',
+            supportsRequest: (domainObject) => domainObject.type === 'satellite',
+            subscribe: (domainObject, callback) => {
+                const interval = setInterval(() => {
+                    const now = Date.now();
+                    callback({
+                        utc: now,
+                        'position.latitude': Math.sin(now / 10000) * 45,
+                        'position.longitude': (now / 500) % 360 - 180,
+                        'position.altitude': 400000
+                    });
+                }, 1000);
+                return () => clearInterval(interval);
+            },
+            request: async (domainObject, options) => {
+                let data = [];
+                for (let t = options.start; t < options.end; t += 10000) {
+                    data.push({
+                        utc: t,
+                        'position.latitude': Math.sin(t / 10000) * 45,
+                        'position.longitude': (t / 500) % 360 - 180,
+                        'position.altitude': 400000
                     });
                 }
-            });
-
-            // Add root to tree
-            app.objects.addRoot(rootObject.identifier);
-
-            // Start OpenMCT
-            try {
-                app.start(document.getElementById('openmct'));
-                console.log('OpenMCT started successfully with Cesium plugin');
-            } catch (e) {
-                console.error('Failed to start OpenMCT:', e);
+                return data;
             }
         });
+
+        // 6. Object Provider
+        openmct.objects.addProvider('test', {
+            get: (identifier) => {
+                if (identifier.key === 'root') return Promise.resolve(rootObject);
+                if (identifier.key === 'globe-1') return Promise.resolve(globeObject);
+                if (identifier.key === 'sat-1') return Promise.resolve(satelliteObject);
+                return Promise.reject(new Error("Object not found"));
+            }
+        });
+
+        openmct.objects.addRoot({ namespace: 'test', key: 'root' });
+
+        openmct.start();
     </script>
 </body>
 </html>
