@@ -76,6 +76,7 @@ class CesiumService {
         }
 
         // --- 1. Main Spacecraft Entity ---
+        // TODO: this.viewer.entities replaced with PointPrimitiveCollection or BillboardCollection
         const satellite = this.viewer.entities.add({
             id: id,
             name: child.name,
