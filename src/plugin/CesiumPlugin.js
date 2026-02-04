@@ -12,7 +12,56 @@ export default function CesiumPlugin() {
             cssClass: 'icon-globe',
             initialize: (obj) => { obj.composition = []; }
         });
+        
+        openmct.types.addType('satellite', {
+            name: 'Satellite',
+            creatable: true,
+            cssClass: 'icon-target',
+            initialize: (obj) => {
+                obj.composition = [];
+                obj.modelUrl = '/Satellite.glb';
+                obj.modelScale = 2.0;
+            }
+        });
 
+        openmct.types.addType('satellite.sensor', {
+            name: 'Instrument Sensor',
+            description: 'A configurable 3D sensor cone for a spacecraft.',
+            creatable: true,
+            cssClass: 'icon-target',
+            initialize: (obj) => {
+                obj.sensorFov = 30;
+                obj.sensorRange = 1000000;
+                obj.sensorColor = '#ffff00'; // Yellow default
+                obj.axis = 'Z'; // Which way does it point?
+            },
+            form: [
+                { name: 'FOV (Degrees)', key: 'sensorFov', control: 'numberfield', cssClass: 'l-input-sm' },
+                { name: 'Range (Meters)', key: 'sensorRange', control: 'numberfield', cssClass: 'l-input-sm' },
+                { name: 'Color (Hex)', key: 'sensorColor', control: 'textfield', cssClass: 'l-input-sm' },
+                { 
+                    name: 'Pointing Axis', 
+                    key: 'axis', 
+                    control: 'select', 
+                    options: [
+                        { name: 'Forward (+Z)', value: 'Z' },
+                        { name: 'Right (+X)', value: 'X' },
+                        { name: 'Up (+Y)', value: 'Y' }
+                    ] 
+                }
+            ]
+        });
+        
+        openmct.composition.addPolicy((parent, child) => {
+            if (parent.type === 'cesium.globe') {
+                return child.type === 'satellite';
+            }
+            if (parent.type === 'satellite') {
+                return child.type === 'satellite.sensor';
+            }
+            return true;
+        });
+        
         // ACTIONS
         openmct.actions.register({
             name: 'Jump to Target',
