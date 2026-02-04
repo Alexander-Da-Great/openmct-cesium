@@ -13,7 +13,8 @@ class CesiumService {
         this.viewer = new Cesium.Viewer(container, {
             animation: false,
             timeline: false,
-            requestRenderMode: false, 
+            requestRenderMode: true, 
+            maximumRenderTimeChange: Infinity,
             sceneModePicker: true,
             baseLayerPicker: true,
             navigationHelpButton: false,
@@ -54,17 +55,14 @@ class CesiumService {
         const orientationProperty = new Cesium.SampledProperty(Cesium.Quaternion);
         
         positionProperty.setInterpolationOptions({
-            interpolationDegree: 1,
-            interpolationAlgorithm: Cesium.LinearApproximation
+            interpolationDegree: 2,
+            interpolationAlgorithm: Cesium.HermitePolynomialApproximation
         });
 
         orientationProperty.setInterpolationOptions({
-            interpolationDegree: 1,
-            interpolationAlgorithm: Cesium.LinearApproximation
+            interpolationDegree: 2,
+            interpolationAlgorithm: Cesium.HermitePolynomialApproximation
         });
-
-        positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
-        orientationProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
 
         if (history && history.length > 0) {
             history.forEach(p => {
@@ -75,8 +73,6 @@ class CesiumService {
             });
         }
 
-        // --- 1. Main Spacecraft Entity ---
-        // TODO: this.viewer.entities replaced with PointPrimitiveCollection or BillboardCollection
         const satellite = this.viewer.entities.add({
             id: id,
             name: child.name,
@@ -112,26 +108,19 @@ class CesiumService {
             }
         });
 
-        // --- 2. Sensor Cone Child Entity ---
         const range = child.sensorRange || 1000000;
         const fovRad = Cesium.Math.toRadians(child.sensorFov || 30);
         const bottomRadius = Math.tan(fovRad / 2) * range;
 
         this.viewer.entities.add({
             parent: satellite,
-            // Offset logic: Move the cone center "forward" so the tip is at the satellite origin
             position: new Cesium.CallbackProperty((time) => {
                 const pos = positionProperty.getValue(time);
                 const ori = orientationProperty.getValue(time);
                 if (!pos || !ori) return pos;
-
-                // Create a transformation matrix from orientation
                 const matrix = Cesium.Matrix3.fromQuaternion(ori);
-                // Get the 'Forward' vector (usually Z in GLB space)
                 const direction = Cesium.Matrix3.getColumn(matrix, 2, new Cesium.Cartesian3());
-                // Center of cylinder is half-range away from the satellite
                 const offset = Cesium.Cartesian3.multiplyByScalar(direction, range / 2, new Cesium.Cartesian3());
-                
                 return Cesium.Cartesian3.add(pos, offset, new Cesium.Cartesian3());
             }, false),
             orientation: orientationProperty,
@@ -153,8 +142,21 @@ class CesiumService {
         if (props) {
             const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
             const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
+            
             props.positionProperty.addSample(time, pos);
             props.orientationProperty.addSample(time, this.getOrientation(datum));
+
+            // Correctly instantiate TimeInterval to prune data older than 1 hour
+            const pruneBefore = Cesium.JulianDate.addDays(time, -1, new Cesium.JulianDate());
+            const pruneAfter = Cesium.JulianDate.addSeconds(time, -3600, new Cesium.JulianDate());
+            
+            const interval = new Cesium.TimeInterval({
+                start: pruneBefore,
+                stop: pruneAfter
+            });
+            
+            props.positionProperty.removeSamples(interval);
+            props.orientationProperty.removeSamples(interval);
         }
     }
 
@@ -179,8 +181,6 @@ class CesiumService {
 
     flyToEntity(id) {
         if (!this.viewer) return;
-        this.viewer.trackedEntity = undefined; 
-        this.viewer.camera.cancelFlight();
         const entity = this.viewer.entities.getById(id);
         if (entity) {
             this.viewer.flyTo(entity, {
@@ -205,4 +205,4 @@ class CesiumService {
     }
 }
 
-export default new CesiumService();
+export default CesiumService;
