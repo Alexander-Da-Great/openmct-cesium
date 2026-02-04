@@ -20,14 +20,19 @@ onMounted(() => {
     const onAdd = (child) => {
         const id = openmct.objects.makeKeyString(child.identifier);
         
-        // Ensure satellite is added to 3D scene
-        cesiumService.addSatellite(child, openmct).then(() => {
-            // Only subscribe once the entity is ready
-            const unsub = openmct.telemetry.subscribe(child, (datum) => {
-                cesiumService.updateSatellite(id, datum);
+        if (child.type === 'satellite') {
+            cesiumService.addSatellite(child, openmct);
+        }
+
+        // If a sensor is added, we observe it for property changes
+        if (child.type === 'satellite.sensor') {
+            const parentId = openmct.objects.makeKeyString(props.domainObject.composition[0]); // Simplified parent lookup
+            
+            // Listen for user editing FOV, Range, or Shape
+            openmct.objects.observe(child, '*', (newObj) => {
+                cesiumService.addSensor(parentId, newObj); 
             });
-            unsubscribes.set(id, unsub);
-        });
+        }
     };
 
     const onRemove = (identifier) => {

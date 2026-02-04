@@ -5,10 +5,9 @@ export class CesiumService {
     constructor() {
         this.viewer = null;
         this.entitiesMap = new Map();
-        // Initialize as a no-op function to prevent "not a function" errors 
-        // if destroy is called before init
-        this.stopBounds = () => {}; 
+        this.stopBounds = () => {};
         
+        // Background thread for coordinate math and telemetry parsing
         this.worker = new Worker(new URL('../workers/SpiceWorker.js', import.meta.url), { 
             type: 'module' 
         });
@@ -40,7 +39,6 @@ export class CesiumService {
         this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK;
         this.viewer.clock.shouldAnimate = true;
 
-        // Store the unsubscribe function returned by MCT
         this.stopBounds = openmct.time.on('bounds', (bounds) => {
             if (this.viewer && !openmct.time.isRealTime()) {
                 this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
@@ -78,6 +76,8 @@ export class CesiumService {
         positionProperty.setInterpolationOptions(interp);
         orientationProperty.setInterpolationOptions(interp);
 
+        if (!this.viewer) return;
+
         const satellite = this.viewer.entities.add({
             id: id,
             name: child.name,
@@ -100,17 +100,8 @@ export class CesiumService {
 
         // Composition listener for dynamic sensors
         const composition = openmct.composition.get(child);
-        composition.on('add', (sensorObj) => {
-            if (sensorObj.type === 'satellite.sensor') {
-                this.addSensor(id, sensorObj);
-            }
-        });
-        composition.on('remove', (sensorIdentifier) => {
-            const sensorId = id + '-' + sensorIdentifier.key;
-            if (this.viewer) {
-                this.viewer.entities.removeById(sensorId);
-            }
-        });
+        composition.on('add', (sensorObj) => this.addSensor(id, sensorObj));
+        composition.on('remove', (sensorIdentifier) => this.removeSensor(id, sensorIdentifier));
         composition.load();
 
         const history = await openmct.telemetry.request(child, openmct.time.getBounds());
@@ -120,38 +111,101 @@ export class CesiumService {
     }
 
     addSensor(satelliteId, sensorObj) {
+        if (!this.viewer) return;
+
         const satProps = this.entitiesMap.get(satelliteId);
         const satelliteEntity = this.viewer.entities.getById(satelliteId);
         const sensorId = satelliteId + '-' + sensorObj.identifier.key;
 
-        const range = sensorObj.sensorRange || 800000;
-        const fovRad = Cesium.Math.toRadians(sensorObj.sensorFov || 30);
-        const bottomRadius = Math.tan(fovRad / 2) * range;
-        const color = Cesium.Color.fromCssColorString(sensorObj.sensorColor || '#ffff00').withAlpha(0.3);
+        this.viewer.entities.removeById(sensorId);
+
+        const range = sensorObj.range || 800000;
+        const fov = sensorObj.fov || 30;
+        const color = Cesium.Color.fromCssColorString(sensorObj.color || '#ffff00').withAlpha(0.3);
+
+        // 1. Determine the pointing vector in satellite local space
+        // We start with a unit vector based on the chosen axis
+        let localDir;
+        switch (sensorObj.direction) {
+            case '+X': localDir = Cesium.Cartesian3.UNIT_X; break;
+            case '-X': localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_X, new Cesium.Cartesian3()); break;
+            case '+Y': localDir = Cesium.Cartesian3.UNIT_Y; break;
+            case '-Y': localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Y, new Cesium.Cartesian3()); break;
+            case '-Z': localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Z, new Cesium.Cartesian3()); break;
+            default:   localDir = Cesium.Cartesian3.UNIT_Z; // +Z is default Forward
+        }
 
         this.viewer.entities.add({
             id: sensorId,
             parent: satelliteEntity,
+            // ORIENTATION: Combine satellite attitude + local sensor rotation
+            orientation: new Cesium.CallbackProperty((time) => {
+                const satOri = satProps.orientationProperty.getValue(time);
+                if (!satOri) return undefined;
+
+                // Cylinder default is pointing Up (+Z). 
+                // We need to rotate it to match our 'localDir'
+                let axisCorrection = Cesium.Quaternion.IDENTITY;
+                
+                if (sensorObj.direction === '-Z') {
+                    // Rotate 180 degrees to point backward
+                    axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Math.PI);
+                } else if (sensorObj.direction.includes('X')) {
+                    axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_Y, Cesium.Math.toRadians(90));
+                } else if (sensorObj.direction.includes('Y')) {
+                    axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Cesium.Math.toRadians(90));
+                }
+
+                // Combine satellite's current attitude with our axis adjustment
+                return Cesium.Quaternion.multiply(satOri, axisCorrection, new Cesium.Quaternion());
+            }, false),
+
+            // POSITION: Always offset by range/2 along the calculated direction
             position: new Cesium.CallbackProperty((time) => {
                 const pos = satProps.positionProperty.getValue(time);
                 const ori = satProps.orientationProperty.getValue(time);
                 if (!pos || !ori) return pos;
 
+                const range = sensorObj.range || 800000;
                 const matrix = Cesium.Matrix3.fromQuaternion(ori);
-                const direction = Cesium.Matrix3.getColumn(matrix, 2, new Cesium.Cartesian3());
-                const offset = Cesium.Cartesian3.multiplyByScalar(direction, range / 2, new Cesium.Cartesian3());
-                return Cesium.Cartesian3.add(pos, offset, new Cesium.Cartesian3());
+                
+                // 1. Define the unit vector for the pointing direction in local space
+                let localDir;
+                switch (sensorObj.direction) {
+                    case '+X': localDir = Cesium.Cartesian3.UNIT_X; break;
+                    case '-X': localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_X, new Cesium.Cartesian3()); break;
+                    case '+Y': localDir = Cesium.Cartesian3.UNIT_Y; break;
+                    case '-Y': localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Y, new Cesium.Cartesian3()); break;
+                    case '+Z': localDir = Cesium.Cartesian3.UNIT_Z; break;
+                    case '-Z': localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Z, new Cesium.Cartesian3()); break;
+                    default:   localDir = Cesium.Cartesian3.UNIT_Z;
+                }
+
+                // 2. Transform the local direction vector into world space using satellite orientation
+                const worldDir = Cesium.Matrix3.multiplyByVector(matrix, localDir, new Cesium.Cartesian3());
+                
+                // 3. Move the center of the cone AWAY from the satellite by half its length
+                // This ensures the tip (apex) stays exactly at the satellite position
+                const halfLengthOffset = Cesium.Cartesian3.multiplyByScalar(worldDir, range / 2, new Cesium.Cartesian3());
+                
+                return Cesium.Cartesian3.add(pos, halfLengthOffset, new Cesium.Cartesian3());
             }, false),
-            orientation: satProps.orientationProperty,
+
             cylinder: {
                 length: range,
-                topRadius: 0.0, // Sharp tip at spacecraft
-                bottomRadius: bottomRadius,
+                topRadius: 0.0,
+                bottomRadius: Math.tan(Cesium.Math.toRadians(fov / 2)) * range,
                 material: color,
                 outline: true,
                 outlineColor: color.withAlpha(0.6)
             }
         });
+    }
+
+    removeSensor(satelliteId, sensorIdentifier) {
+        if (this.viewer) {
+            this.viewer.entities.removeById(satelliteId + '-' + sensorIdentifier.key);
+        }
     }
 
     updateSatellite(id, datum) {
@@ -169,7 +223,7 @@ export class CesiumService {
         props.orientationProperty.addSample(time, this.getOrientation(datum));
         props.lastUpdateTime = datum.utc;
 
-        // "Butter" lag for smoothness
+        // "Butter" lag: interpolation destination buffer
         const delayedTime = Cesium.JulianDate.addSeconds(time, -1.0, new Cesium.JulianDate());
         if (this.viewer && !this.viewer.trackedEntity) {
             this.viewer.clock.currentTime = delayedTime;
@@ -204,6 +258,7 @@ export class CesiumService {
     removeSatellite(id) {
         if (this.viewer) {
             this.viewer.entities.removeById(id);
+            // Find and remove all child sensor entities
             const sensors = this.viewer.entities.values.filter(e => e.parent && e.parent.id === id);
             sensors.forEach(s => this.viewer.entities.remove(s));
         }

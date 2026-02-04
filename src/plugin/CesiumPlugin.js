@@ -25,30 +25,31 @@ export default function CesiumPlugin() {
         });
 
         openmct.types.addType('satellite.sensor', {
-            name: 'Instrument Sensor',
-            description: 'A configurable 3D sensor cone for a spacecraft.',
+            name: 'Satellite Sensor',
             creatable: true,
             cssClass: 'icon-target',
             initialize: (obj) => {
-                obj.sensorFov = 30;
-                obj.sensorRange = 1000000;
-                obj.sensorColor = '#ffff00'; // Yellow default
-                obj.axis = 'Z'; // Which way does it point?
+                obj.shape = 'cone';
+                obj.fov = 30;
+                obj.range = 800000; // This is the "Height" of the cone
+                obj.color = '#ffff00';
+                obj.direction = '+Z'; // +X, -X, +Y, -Y, +Z, -Z
+                obj.offBoresightRotation = 0; // Rotation around the pointing axis
             },
             form: [
-                { name: 'FOV (Degrees)', key: 'sensorFov', control: 'numberfield', cssClass: 'l-input-sm' },
-                { name: 'Range (Meters)', key: 'sensorRange', control: 'numberfield', cssClass: 'l-input-sm' },
-                { name: 'Color (Hex)', key: 'sensorColor', control: 'textfield', cssClass: 'l-input-sm' },
-                { 
-                    name: 'Pointing Axis', 
-                    key: 'axis', 
-                    control: 'select', 
-                    options: [
-                        { name: 'Forward (+Z)', value: 'Z' },
-                        { name: 'Right (+X)', value: 'X' },
-                        { name: 'Up (+Y)', value: 'Y' }
-                    ] 
-                }
+                { name: 'Shape', key: 'shape', control: 'select', options: [
+                    { name: 'Conical', value: 'cone' },
+                    { name: 'Frustum', value: 'frustum' }
+                ]},
+                { name: 'FOV (Degrees)', key: 'fov', control: 'numberfield' },
+                { name: 'Range/Height (Meters)', key: 'range', control: 'numberfield' },
+                { name: 'Pointing Direction', key: 'direction', control: 'select', options: [
+                    { name: 'Forward (+Z)', value: '+Z' }, { name: 'Backward (-Z)', value: '-Z' },
+                    { name: 'Right (+X)', value: '+X' }, { name: 'Left (-X)', value: '-X' },
+                    { name: 'Up (+Y)', value: '+Y' }, { name: 'Down (-Y)', value: '-Y' }
+                ]},
+                { name: 'Local Rotation (Deg)', key: 'offBoresightRotation', control: 'numberfield' },
+                { name: 'Color', key: 'color', control: 'textfield' }
             ]
         });
         
@@ -61,7 +62,7 @@ export default function CesiumPlugin() {
             }
             return true;
         });
-        
+
         // ACTIONS
         openmct.actions.register({
             name: 'Jump to Target',
