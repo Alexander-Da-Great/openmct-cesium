@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { resolve } from 'path';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 export default defineConfig({
@@ -13,7 +12,6 @@ export default defineConfig({
         { src: 'node_modules/cesium/Build/Cesium/Workers/*', dest: 'Workers' },
         { src: 'node_modules/cesium/Build/Cesium/ThirdParty/*', dest: 'ThirdParty' },
         { src: 'node_modules/openmct/dist/fonts/*', dest: 'fonts' },
-        // These two ensure the <script> and <link> tags in index.html work
         { src: 'node_modules/openmct/dist/openmct.js', dest: './' },
         { src: 'node_modules/openmct/dist/snowTheme.css', dest: './' }
       ]
@@ -25,5 +23,12 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true
+  },
+  // CRITICAL: Disable sourcemaps to stop the console errors and thread blocking
+  build: {
+    sourcemap: false,
+  },
+  css: {
+    devSourcemap: false
   }
 });

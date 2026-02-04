@@ -6,19 +6,12 @@ export class CesiumService {
         this.viewer = null;
         this.entitiesMap = new Map();
         this.stopBounds = null;
-
-        // Initialize the background thread for coordinate math and telemetry parsing
-        // Vite automatically detects this URL pattern and handles the bundling
         this.worker = new Worker(new URL('../workers/SpiceWorker.js', import.meta.url), {
             type: 'module'
         });
-
         this.setupWorkerListeners();
     }
 
-    /**
-     * Handles data returning from the background worker
-     */
     setupWorkerListeners() {
         this.worker.onmessage = (e) => {
             const { type, id, payload } = e.data;
@@ -28,20 +21,13 @@ export class CesiumService {
         };
     }
 
-    /**
-     * Initializes the Cesium Viewer with "Cosmographia-style" smoothness settings
-     */
     init(container, openmct) {
         if (this.viewer) return;
 
         this.viewer = new Cesium.Viewer(container, {
             animation: false,
             timeline: false,
-            // requestRenderMode: true saves CPU, but requires careful triggers
-            requestRenderMode: true, 
-            // Setting this to 0.0 forces Cesium to render a frame if the clock moves
-            // even by a microsecond. This fills the gaps between 1Hz telemetry.
-            maximumRenderTimeChange: 0.0, 
+            requestRenderMode: false, // Must be false for constant smooth gliding
             sceneModePicker: true,
             baseLayerPicker: true,
             navigationHelpButton: false,
@@ -49,7 +35,6 @@ export class CesiumService {
             creditContainer: document.createElement("div")
         });
 
-        // Use SYSTEM_CLOCK for standard 60fps time progression
         this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK;
         this.viewer.clock.shouldAnimate = true;
 
@@ -57,30 +42,19 @@ export class CesiumService {
         this.stopBounds = openmct.time.on('bounds', (bounds) => {
             if (this.viewer && !openmct.time.isRealTime()) {
                 this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
-                this.viewer.scene.requestRender();
             }
         });
 
-        // WebGL Warmup: Force a resize and render to initialize textures
         this.viewer.resize();
-        for (let i = 0; i < 3; i++) {
-            this.viewer.render();
-        }
     }
 
-    /**
-     * Local helper for orientation, used for real-time updates
-     */
     getOrientation(datum) {
         if (datum['attitude.qx'] !== undefined) {
             return new Cesium.Quaternion(
-                datum['attitude.qx'],
-                datum['attitude.qy'],
-                datum['attitude.qz'],
-                datum['attitude.qw']
+                datum['attitude.qx'], datum['attitude.qy'], 
+                datum['attitude.qz'], datum['attitude.qw']
             );
         }
-
         const position = Cesium.Cartesian3.fromDegrees(
             datum['position.longitude'] || 0,
             datum['position.latitude'] || 0,
@@ -94,9 +68,6 @@ export class CesiumService {
         return Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
     }
 
-    /**
-     * Adds a new satellite and requests its history
-     */
     async addSatellite(child, openmct) {
         const id = openmct.objects.makeKeyString(child.identifier);
         if (this.entitiesMap.has(id)) return;
@@ -104,17 +75,18 @@ export class CesiumService {
         const positionProperty = new Cesium.SampledPositionProperty();
         const orientationProperty = new Cesium.SampledProperty(Cesium.Quaternion);
         
-        // High interpolation degree (3) makes even sparse data look curved
+        // Degree 2 Hermite creates the smooth orbital arc
         const interpOptions = {
-            interpolationDegree: 3,
+            interpolationDegree: 2,
             interpolationAlgorithm: Cesium.HermitePolynomialApproximation
         };
 
         positionProperty.setInterpolationOptions(interpOptions);
         orientationProperty.setInterpolationOptions(interpOptions);
         
-        // HOLD prevents the spacecraft from disappearing if the clock passes the last data point
+        // HOLD ensures visibility if stream drops
         positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
+        orientationProperty.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
 
         const satellite = this.viewer.entities.add({
             id: id,
@@ -123,33 +95,19 @@ export class CesiumService {
             orientation: orientationProperty,
             model: {
                 uri: child.modelUrl || '/Satellite.glb',
-                scale: parseFloat(child.modelScale) || 1.0,
-                runAnimations: true
+                scale: parseFloat(child.modelScale) || 1.0
             },
             path: {
                 resolution: 1,
-                material: new Cesium.PolylineGlowMaterialProperty({ 
-                    glowPower: 0.1, 
-                    color: Cesium.Color.CYAN 
-                }),
+                material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
                 width: 4,
                 leadTime: 0, 
-                trailTime: 1800 
-            },
-            label: {
-                text: child.name,
-                font: '12pt monospace',
-                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                outlineWidth: 2,
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                pixelOffset: new Cesium.Cartesian2(0, -30),
-                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000000)
+                trailTime: 600 
             }
         });
 
-        this.entitiesMap.set(id, { positionProperty, orientationProperty, lastUpdateTime: 0 });
+        this.entitiesMap.set(id, { positionProperty, orientationProperty, lastSampleTime: null });
 
-        // Offload historical data loading to the Web Worker
         const bounds = openmct.time.getBounds();
         const history = await openmct.telemetry.request(child, bounds);
         if (history && history.length > 0) {
@@ -157,65 +115,56 @@ export class CesiumService {
         }
     }
 
-    /**
-     * Direct update from live telemetry stream
-     */
     updateSatellite(id, datum) {
         const props = this.entitiesMap.get(id);
-        if (props) {
-            if (datum.utc <= props.lastUpdateTime) return;
-            
-            const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
-            const pos = Cesium.Cartesian3.fromDegrees(
-                datum['position.longitude'], 
-                datum['position.latitude'], 
-                datum['position.altitude']
-            );
-            
-            props.positionProperty.addSample(time, pos);
-            props.orientationProperty.addSample(time, this.getOrientation(datum));
-            props.lastUpdateTime = datum.utc;
+        if (!props) return;
 
-            // Memory Management: Remove data older than 1 hour
-            const pruneTime = Cesium.JulianDate.addSeconds(time, -3600, new Cesium.JulianDate());
-            const interval = new Cesium.TimeInterval({
-                start: Cesium.JulianDate.fromIso8601("1900-01-01T00:00:00Z"),
-                stop: pruneTime,
-                isStartIncluded: true,
-                isStopIncluded: true
-            });
-            props.positionProperty.removeSamples(interval);
-            props.orientationProperty.removeSamples(interval);
+        const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
+
+        if (props.lastSampleTime && Cesium.JulianDate.compare(time, props.lastSampleTime) <= 0) {
+            return; 
         }
+
+        const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
+        const ori = this.getOrientation(datum);
+        
+        props.positionProperty.addSample(time, pos);
+        props.orientationProperty.addSample(time, ori);
+        props.lastSampleTime = time;
+
+        // --- THE "BUTTER" FIX: CLOCK OFFSET ---
+        // We set the viewer clock to be 2 seconds BEHIND the latest telemetry packet.
+        // This ensures Cesium always has a "next point" to interpolate toward.
+        const delayedTime = Cesium.JulianDate.addSeconds(time, -2.0, new Cesium.JulianDate());
+        
+        if (this.viewer && !this.viewer.trackedEntity) {
+             this.viewer.clock.currentTime = delayedTime;
+        }
+
+        // Memory cleanup
+        const pruneTime = Cesium.JulianDate.addSeconds(time, -600, new Cesium.JulianDate());
+        const interval = new Cesium.TimeInterval({
+            start: Cesium.JulianDate.fromIso8601("1900-01-01T00:00:00Z"),
+            stop: pruneTime
+        });
+        props.positionProperty.removeSamples(interval);
     }
 
-    /**
-     * Injects bulk points from the background worker
-     */
     applyProcessedData(id, payload) {
         const props = this.entitiesMap.get(id);
         if (!props) return;
 
-        const times = [];
-        const positions = [];
-        const orientations = [];
-
         payload.forEach(point => {
-            const t = Cesium.JulianDate.fromDate(new Date(point.t));
-            times.push(t);
-            positions.push(Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.alt));
-            if (point.q) {
-                orientations.push(new Cesium.Quaternion(point.q[0], point.q[1], point.q[2], point.q[3]));
+            const time = Cesium.JulianDate.fromDate(new Date(point.t));
+            if (!props.lastSampleTime || Cesium.JulianDate.compare(time, props.lastSampleTime) > 0) {
+                const pos = Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.alt);
+                props.positionProperty.addSample(time, pos);
+                if (point.q) {
+                    props.orientationProperty.addSample(time, new Cesium.Quaternion(point.q[0], point.q[1], point.q[2], point.q[3]));
+                }
+                props.lastSampleTime = time;
             }
         });
-
-        // Batch adding is significantly more performant
-        props.positionProperty.addSamples(times, positions);
-        if (orientations.length > 0) {
-            props.orientationProperty.addSamples(times, orientations);
-        }
-        
-        this.viewer.scene.requestRender();
     }
 
     trackEntity(id) {
@@ -225,25 +174,7 @@ export class CesiumService {
 
     flyToEntity(id) {
         const entity = this.viewer?.entities.getById(id);
-        if (entity) {
-            this.viewer.flyTo(entity, {
-                offset: new Cesium.HeadingPitchRange(0, -0.5, 5000)
-            });
-        }
-    }
-
-    resetView() {
-        if (this.viewer) {
-            this.viewer.trackedEntity = undefined;
-            this.viewer.camera.flyTo({
-                destination: Cesium.Cartesian3.fromDegrees(0.0, 0.0, 20000000.0)
-            });
-        }
-    }
-
-    removeSatellite(id) {
-        this.viewer?.entities.removeById(id);
-        this.entitiesMap.delete(id);
+        if (entity) this.viewer.flyTo(entity);
     }
 
     destroy() {
