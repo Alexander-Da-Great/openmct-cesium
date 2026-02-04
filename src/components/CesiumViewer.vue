@@ -13,31 +13,21 @@ const unsubscribes = new Map();
 let resizeObserver;
 
 onMounted(() => {
-    // 1. Initialize
     cesiumService.init(cesiumContainer.value, openmct);
-
-    // 2. Force an immediate resize to fix the "top-left corner" bug
-    if (cesiumService.viewer) {
-        cesiumService.viewer.resize();
-    }
-
-    // 3. Watch for Open MCT pane resizes (Cosmographia feel)
-    resizeObserver = new ResizeObserver(() => {
-        if (cesiumService.viewer) {
-            cesiumService.viewer.resize();
-        }
-    });
-    resizeObserver.observe(cesiumContainer.value);
 
     const composition = openmct.composition.get(props.domainObject);
     
     const onAdd = (child) => {
         const id = openmct.objects.makeKeyString(child.identifier);
-        cesiumService.addSatellite(child, openmct);
-        const unsub = openmct.telemetry.subscribe(child, (datum) => {
-            cesiumService.updateSatellite(id, datum);
+        
+        // Ensure satellite is added to 3D scene
+        cesiumService.addSatellite(child, openmct).then(() => {
+            // Only subscribe once the entity is ready
+            const unsub = openmct.telemetry.subscribe(child, (datum) => {
+                cesiumService.updateSatellite(id, datum);
+            });
+            unsubscribes.set(id, unsub);
         });
-        unsubscribes.set(id, unsub);
     };
 
     const onRemove = (identifier) => {
@@ -52,12 +42,16 @@ onMounted(() => {
     composition.on('add', onAdd);
     composition.on('remove', onRemove);
     composition.load();
+
+    resizeObserver = new ResizeObserver(() => {
+        if (cesiumService.viewer) cesiumService.viewer.resize();
+    });
+    resizeObserver.observe(cesiumContainer.value);
 });
 
 onBeforeUnmount(() => {
     if (resizeObserver) resizeObserver.disconnect();
     unsubscribes.forEach(unsub => unsub());
-    cesiumService.destroy();
 });
 </script>
 
@@ -69,15 +63,10 @@ onBeforeUnmount(() => {
     position: absolute;
     top: 0;
     left: 0;
-    right: 0;
-    bottom: 0;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
     background: #000;
+    z-index: 1; /* Ensure it stays above background layers */
 }
 
-/* Ensure Cesium widget itself fills the wrapper */
 :deep(.cesium-viewer), :deep(.cesium-widget) {
     width: 100% !important;
     height: 100% !important;
