@@ -59,7 +59,10 @@ onBeforeUnmount(() => {
     unsubscribes.forEach(unsub => unsub());
 });
 </script>
-
+<style lang="scss">
+  /* Change @import to @use */
+  @use "../styles/cesium.scss";
+</style>
 <style scoped>
 .cesium-viewer-wrapper {
     width: 100%;

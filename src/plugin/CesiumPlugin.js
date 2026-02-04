@@ -1,6 +1,7 @@
 import CesiumViewComponent from '../components/CesiumViewer.vue';
 import { CesiumService } from '../services/CesiumService.js';
 import { createApp } from 'vue';
+import '../styles/cesium.scss';
 
 export default function CesiumPlugin() {
     return function install(openmct) {
@@ -16,7 +17,7 @@ export default function CesiumPlugin() {
         openmct.types.addType('satellite', {
             name: 'Satellite',
             creatable: true,
-            cssClass: 'icon-target',
+            cssClass: 'icon-satellite',
             initialize: (obj) => {
                 obj.composition = [];
                 obj.modelUrl = '/Satellite.glb';
@@ -27,7 +28,7 @@ export default function CesiumPlugin() {
         openmct.types.addType('satellite.sensor', {
             name: 'Satellite Sensor',
             creatable: true,
-            cssClass: 'icon-target',
+            cssClass: 'icon-satellite-sensor',
             initialize: (obj) => {
                 obj.shape = 'cone';
                 obj.fov = 30;
