@@ -5,7 +5,7 @@ export class CesiumService {
     constructor() {
         this.viewer = null;
         this.entitiesMap = new Map();
-        this.stopBounds = () => {};
+        this.stopBounds = null;
     }
 
     init(container, openmct) {
@@ -14,7 +14,7 @@ export class CesiumService {
         this.viewer = new Cesium.Viewer(container, {
             animation: false,
             timeline: false,
-            requestRenderMode: false, // Set to false for now to ensure we see the mock data moving
+            requestRenderMode: false, 
             sceneModePicker: true,
             baseLayerPicker: true,
             navigationHelpButton: false,
@@ -22,11 +22,15 @@ export class CesiumService {
             creditContainer: document.createElement("div")
         });
 
-        // Set the clock to match Open MCT's time system
+        // Set the clock to SYSTEM_CLOCK so it moves smoothly on its own
         this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK;
         this.viewer.clock.shouldAnimate = true;
 
+        if (this.stopBounds) this.stopBounds();
+
         this.stopBounds = openmct.time.on('bounds', (bounds) => {
+            // Only sync the clock when the user manually scrubs or bounds change, 
+            // NOT on every telemetry tick.
             if (this.viewer && !openmct.time.isRealTime()) {
                 this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
             }
@@ -51,19 +55,20 @@ export class CesiumService {
 
     async addSatellite(child, openmct) {
         const id = openmct.objects.makeKeyString(child.identifier);
-        
-        // Prevent double-adding
         if (this.entitiesMap.has(id)) return;
 
         const positionProperty = new Cesium.SampledPositionProperty();
         const orientationProperty = new Cesium.SampledProperty(Cesium.Quaternion);
         
+        // Lagrange is often more stable for web-based telemetry streams
         positionProperty.setInterpolationOptions({
-            interpolationDegree: 2,
-            interpolationAlgorithm: Cesium.HermitePolynomialApproximation
+            interpolationDegree: 1,
+            interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
         });
 
-        // Load History
+        // This allows the satellite to keep moving even if there's a tiny network lag
+        positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
+
         const bounds = openmct.time.getBounds();
         const history = await openmct.telemetry.request(child, bounds);
         
@@ -76,30 +81,33 @@ export class CesiumService {
             });
         }
 
-        const satellite = this.viewer.entities.add({
+        this.viewer.entities.add({
             id: id,
             name: child.name,
             position: positionProperty,
             orientation: orientationProperty,
             model: {
                 uri: child.modelUrl || '/Satellite.glb',
-                scale: parseFloat(child.modelScale) || 1.0,
-                minimumPixelSize: 64 // Ensure it doesn't disappear when zooming out
+                scale: parseFloat(child.modelScale) || 1.0
             },
             path: {
                 resolution: 1,
-                material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
-                width: 5,
-                leadTime: 600, // Show 10 mins ahead (reconstructed)
-                trailTime: 3600 // Show 1 hour behind
+                material: new Cesium.PolylineGlowMaterialProperty({ 
+                    glowPower: 0.2, 
+                    color: Cesium.Color.CYAN 
+                }),
+                width: 4,
+                leadTime: 0,
+                trailTime: 1800 
             },
             label: {
                 text: child.name,
-                font: '14pt monospace',
+                font: '12pt monospace',
                 style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                 outlineWidth: 2,
                 verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                pixelOffset: new Cesium.Cartesian2(0, -40)
+                pixelOffset: new Cesium.Cartesian2(0, -30),
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000000)
             }
         });
 
@@ -109,7 +117,6 @@ export class CesiumService {
     updateSatellite(id, datum) {
         const props = this.entitiesMap.get(id);
         if (props) {
-            // Ensure we don't add duplicate or older timestamps
             if (datum.utc <= props.lastUpdateTime) return;
             
             const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
@@ -119,25 +126,23 @@ export class CesiumService {
             props.orientationProperty.addSample(time, this.getOrientation(datum));
             props.lastUpdateTime = datum.utc;
 
-            // Sync viewer clock to latest telemetry if in realtime mode
-            if (this.viewer && this.viewer.clock.shouldAnimate) {
-                this.viewer.clock.currentTime = time;
-            }
+            // DO NOT set this.viewer.clock.currentTime here.
+            // Let the SYSTEM_CLOCK move the viewer forward naturally.
         }
     }
 
+    // ... (rest of the methods: trackEntity, flyToEntity, resetView, removeSatellite) ...
+    
     trackEntity(id) {
         const entity = this.viewer?.entities.getById(id);
-        if (entity) {
-            this.viewer.trackedEntity = entity;
-        }
+        if (entity) this.viewer.trackedEntity = entity;
     }
 
     flyToEntity(id) {
         const entity = this.viewer?.entities.getById(id);
         if (entity) {
             this.viewer.flyTo(entity, {
-                offset: new Cesium.HeadingPitchRange(Cesium.Math.toRadians(0), Cesium.Math.toRadians(-45), 2000)
+                offset: new Cesium.HeadingPitchRange(0, -0.5, 5000)
             });
         }
     }
@@ -157,7 +162,10 @@ export class CesiumService {
     }
 
     destroy() {
-        this.stopBounds();
+        if (typeof this.stopBounds === 'function') {
+            this.stopBounds();
+            this.stopBounds = null;
+        }
         if (this.viewer) {
             this.viewer.destroy();
             this.viewer = null;
