@@ -21,31 +21,31 @@ onMounted(() => {
     const composition = openmct.composition.get(props.domainObject);
     
     const onAdd = (child) => {
-    const childId = openmct.objects.makeKeyString(child.identifier);
+        const childId = openmct.objects.makeKeyString(child.identifier);
 
-    if (child.type === 'satellite') {
-        cesiumService.addSatellite(child, openmct);
-        
-        // WATCH SATELLITE FOR TOGGLES (Orbit)
-        unsubscribes.set(childId, openmct.objects.observe(child, '*', (newSat) => {
-            cesiumService.updateSatelliteProperties(childId, newSat);
-        }));
-
-        const sensorComposition = openmct.composition.get(child);
-        sensorComposition.on('add', (sensor) => {
-            const satId = openmct.objects.makeKeyString(child.identifier);
-            cesiumService.addSensor(satId, sensor);
+        if (child.type === 'satellite') {
+            cesiumService.addSatellite(child, openmct);
             
-            // WATCH SENSOR FOR TOGGLES (Cone)
-            unsubscribes.set(openmct.objects.makeKeyString(sensor.identifier), 
-                openmct.objects.observe(sensor, '*', (newVal) => {
-                    cesiumService.addSensor(satId, newVal);
-                })
-            );
-        });
-        sensorComposition.load();
-    }
-};
+            // WATCH SATELLITE FOR TOGGLES (Orbit)
+            unsubscribes.set(childId, openmct.objects.observe(child, '*', (newSat) => {
+                cesiumService.updateSatelliteProperties(childId, newSat);
+            }));
+
+            const sensorComposition = openmct.composition.get(child);
+            sensorComposition.on('add', (sensor) => {
+                const satId = openmct.objects.makeKeyString(child.identifier);
+                cesiumService.addSensor(satId, sensor);
+                
+                // WATCH SENSOR FOR TOGGLES (Cone)
+                unsubscribes.set(openmct.objects.makeKeyString(sensor.identifier), 
+                    openmct.objects.observe(sensor, '*', (newVal) => {
+                        cesiumService.addSensor(satId, newVal);
+                    })
+                );
+            });
+            sensorComposition.load();
+        }
+    };
 
     const onRemove = (identifier) => {
         const id = openmct.objects.makeKeyString(identifier);

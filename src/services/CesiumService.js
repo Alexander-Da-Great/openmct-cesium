@@ -26,10 +26,17 @@ export class CesiumService {
         if (this.viewer) return;
 
         this.viewer = new Cesium.Viewer(container, {
-            animation: false, timeline: false,
-            requestRenderMode: false, sceneModePicker: true,
-            baseLayerPicker: true, navigationHelpButton: false,
-            infoBox: false, creditContainer: document.createElement("div")
+            animation: false,
+            timeline: false,
+            // PERFORMANCE BOOST: Disable constant rendering
+            requestRenderMode: true, 
+            // Ensure we still get at least one frame occasionally for clock updates
+            maximumRenderTimeChange: 0.0, 
+            sceneModePicker: true,
+            baseLayerPicker: true,
+            navigationHelpButton: false,
+            infoBox: false,
+            creditContainer: document.createElement("div")
         });
 
         this.viewer.clock.shouldAnimate = true;
@@ -285,6 +292,10 @@ export class CesiumService {
         }
         
         props.lastUpdateTime = datum.utc;
+        if (this.viewer) {
+            this.viewer.scene.requestRender();
+        }
+
     }
 
     applyProcessedData(id, payload) {
@@ -295,6 +306,9 @@ export class CesiumService {
             props.positionProperty.addSample(t, Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt));
             if (p.q) props.orientationProperty.addSample(t, new Cesium.Quaternion(...p.q));
         });
+        if (this.viewer) {
+            this.viewer.scene.requestRender();
+        }
     }
 
     removeSatellite(id) {
