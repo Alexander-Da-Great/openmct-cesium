@@ -6,6 +6,7 @@ export class CesiumService {
         this.viewer = null;
         this.entitiesMap = new Map();
         this.stopBounds = () => {};
+        this._sensorUnsubscribe = null;
         
         this.worker = new Worker(new URL('../workers/SpiceWorker.js', import.meta.url), { 
             type: 'module' 
@@ -25,26 +26,18 @@ export class CesiumService {
         if (this.viewer) return;
 
         this.viewer = new Cesium.Viewer(container, {
-            animation: false,
-            timeline: false,
-            requestRenderMode: false, 
-            sceneModePicker: true,
-            baseLayerPicker: true,
-            navigationHelpButton: false,
-            infoBox: false,
-            creditContainer: document.createElement("div")
+            animation: false, timeline: false,
+            requestRenderMode: false, sceneModePicker: true,
+            baseLayerPicker: true, navigationHelpButton: false,
+            infoBox: false, creditContainer: document.createElement("div")
         });
 
-        this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK;
         this.viewer.clock.shouldAnimate = true;
-
         this.stopBounds = openmct.time.on('bounds', (bounds) => {
             if (this.viewer && !openmct.time.isRealTime()) {
                 this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
             }
         });
-
-        this.viewer.resize();
     }
 
     getOrientation(datum) {
@@ -67,30 +60,24 @@ export class CesiumService {
 
         const positionProperty = new Cesium.SampledPositionProperty();
         const orientationProperty = new Cesium.SampledProperty(Cesium.Quaternion);
+        const interp = { interpolationDegree: 2, interpolationAlgorithm: Cesium.HermitePolynomialApproximation };
         
-        const interp = { 
-            interpolationDegree: 2, 
-            interpolationAlgorithm: Cesium.HermitePolynomialApproximation 
-        };
         positionProperty.setInterpolationOptions(interp);
         orientationProperty.setInterpolationOptions(interp);
 
-        if (!this.viewer) return;
-
-        const satellite = this.viewer.entities.add({
+        this.viewer.entities.add({
             id: id,
             name: child.name,
             position: positionProperty,
             orientation: orientationProperty,
-            model: { 
-                uri: child.modelUrl || '/Satellite.glb', 
-                scale: parseFloat(child.modelScale) || 1.0 
-            },
+            show: child.showSatellite !== false,
+            model: { uri: child.modelUrl || '/Satellite.glb', scale: parseFloat(child.modelScale) || 1.0 },
             path: {
+                show: child.showOrbit !== false,
                 resolution: 1,
                 material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
-                width: 4, 
-                trailTime: 1800, 
+                width: 4,
+                trailTime: 1800,
                 leadTime: 0
             }
         });
@@ -108,147 +95,196 @@ export class CesiumService {
         }
     }
 
+    updateSatelliteProperties(id, satelliteObj) {
+        const entity = this.viewer.entities.getById(id);
+        if (entity) {
+            // Use == true to catch both boolean true and string "true"
+            entity.show = satelliteObj.showSatellite == true;
+            
+            if (entity.path) {
+                entity.path.show = satelliteObj.showOrbit == true;
+            }
+        }
+    }
+
     addSensor(satelliteId, sensorObj) {
         if (!this.viewer) return;
-
         const satProps = this.entitiesMap.get(satelliteId);
+        const satelliteEntity = this.viewer.entities.getById(satelliteId);
+        if (!satProps) return;
+
         const sensorId = satelliteId + '-' + sensorObj.identifier.key;
         const footprintId = sensorId + '-footprint';
 
         this.viewer.entities.removeById(sensorId);
         this.viewer.entities.removeById(footprintId);
 
-        const range = sensorObj.range || 800000;
-        const fov = sensorObj.fov || 30;
+        // Visibility Check
+        if (sensorObj.showPOV == false || sensorObj.showPOV === "false") return;
+
+        const range = parseFloat(sensorObj.range) || 800000;
+        const fov = parseFloat(sensorObj.fov) || 30;
         const color = Cesium.Color.fromCssColorString(sensorObj.color || '#ffff00');
 
-        // 1. Define Local Vector and Rotation Correction
         let localDir;
         let axisCorrection = Cesium.Quaternion.IDENTITY;
 
         switch (sensorObj.direction) {
             case '+X': 
                 localDir = Cesium.Cartesian3.UNIT_X; 
-                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_Y, Cesium.Math.toRadians(90));
-                break;
+                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_Y, Cesium.Math.toRadians(90)); break;
             case '-X': 
                 localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_X, new Cesium.Cartesian3()); 
-                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_Y, Cesium.Math.toRadians(-90));
-                break;
+                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_Y, Cesium.Math.toRadians(-90)); break;
             case '+Y': 
                 localDir = Cesium.Cartesian3.UNIT_Y; 
-                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Cesium.Math.toRadians(-90));
-                break;
+                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Cesium.Math.toRadians(-90)); break;
             case '-Y': 
                 localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Y, new Cesium.Cartesian3()); 
-                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Cesium.Math.toRadians(90));
-                break;
+                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Cesium.Math.toRadians(90)); break;
             case '-Z': 
                 localDir = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Z, new Cesium.Cartesian3()); 
-                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Math.PI);
-                break;
-            case '+Z':
-            default:   
-                localDir = Cesium.Cartesian3.UNIT_Z; 
-                axisCorrection = Cesium.Quaternion.IDENTITY;
-                break;
+                axisCorrection = Cesium.Quaternion.fromAxisAngle(Cesium.Cartesian3.UNIT_X, Math.PI); break;
+            default: localDir = Cesium.Cartesian3.UNIT_Z; axisCorrection = Cesium.Quaternion.IDENTITY;
         }
 
-        
-
-        // 2. Add the Sensor Volume
         this.viewer.entities.add({
             id: sensorId,
+            parent: satelliteEntity, // Using parent helps with visibility hierarchy
             position: new Cesium.CallbackProperty((time) => {
                 const pos = satProps.positionProperty.getValue(time);
                 const ori = satProps.orientationProperty.getValue(time);
                 if (!pos || !ori) return pos;
-
-                // Create transformation matrix from satellite attitude
                 const matrix = Cesium.Matrix3.fromQuaternion(ori);
-                // Rotate our local pointing direction into World Space
                 const worldDir = Cesium.Matrix3.multiplyByVector(matrix, localDir, new Cesium.Cartesian3());
-                
-                // CRITICAL FIX: The center of the cylinder must be shifted by HALF the length
-                // so that the 'top' (the pointy end) stays at the satellite's position.
                 const offset = Cesium.Cartesian3.multiplyByScalar(worldDir, range / 2, new Cesium.Cartesian3());
                 return Cesium.Cartesian3.add(pos, offset, new Cesium.Cartesian3());
             }, false),
             orientation: new Cesium.CallbackProperty((time) => {
                 const satOri = satProps.orientationProperty.getValue(time);
                 if (!satOri) return undefined;
-                // Align cylinder axis with the satellite's chosen direction axis
                 return Cesium.Quaternion.multiply(satOri, axisCorrection, new Cesium.Quaternion());
             }, false),
             cylinder: {
-                length: range,
-                topRadius: 0.0, // Pointy end
-                bottomRadius: Math.tan(Cesium.Math.toRadians(fov / 2)) * range,
+                length: range, topRadius: Math.tan(Cesium.Math.toRadians(fov / 2)) * range,
+                bottomRadius: 0.0,
                 slices: sensorObj.shape === 'frustum' ? 4 : 64,
-                material: color.withAlpha(0.3),
-                outline: true,
-                outlineColor: color.withAlpha(0.6)
+                material: color.withAlpha(0.3), outline: true, outlineColor: color.withAlpha(0.6)
             }
         });
 
-        // 3. Add the Footprint
         this.viewer.entities.add({
             id: footprintId,
+            parent: satelliteEntity,
             position: new Cesium.CallbackProperty((time) => {
                 const pos = satProps.positionProperty.getValue(time);
                 const ori = satProps.orientationProperty.getValue(time);
                 if (!pos || !ori) return undefined;
-
                 const matrix = Cesium.Matrix3.fromQuaternion(ori);
                 const worldDir = Cesium.Matrix3.multiplyByVector(matrix, localDir, new Cesium.Cartesian3());
-                const ray = new Cesium.Ray(pos, worldDir);
-                return this.viewer.scene.globe.pick(ray, this.viewer.scene);
+                return this.viewer.scene.globe.pick(new Cesium.Ray(pos, worldDir), this.viewer.scene);
             }, false),
             ellipse: {
                 semiMajorAxis: new Cesium.CallbackProperty((time) => {
                     const pos = satProps.positionProperty.getValue(time);
-                    if (!pos) return 0;
-                    const alt = Cesium.Cartographic.fromCartesian(pos).height;
-                    return Math.tan(Cesium.Math.toRadians(fov / 2)) * alt;
+                    return pos ? Math.tan(Cesium.Math.toRadians(fov / 2)) * Cesium.Cartographic.fromCartesian(pos).height : 0;
                 }, false),
                 semiMinorAxis: new Cesium.CallbackProperty((time) => {
                     const pos = satProps.positionProperty.getValue(time);
-                    if (!pos) return 0;
-                    const alt = Cesium.Cartographic.fromCartesian(pos).height;
-                    const aspect = (sensorObj.shape === 'frustum') ? (sensorObj.aspectRatio || 1.0) : 1.0;
-                    return Math.tan(Cesium.Math.toRadians(fov / 2)) * alt * aspect;
+                    const aspect = (sensorObj.shape === 'frustum') ? (parseFloat(sensorObj.aspectRatio) || 1.0) : 1.0;
+                    return pos ? Math.tan(Cesium.Math.toRadians(fov / 2)) * Cesium.Cartographic.fromCartesian(pos).height * aspect : 0;
                 }, false),
-                material: color.withAlpha(0.4),
-                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                outline: true,
-                outlineColor: color
+                material: color.withAlpha(0.4), heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                outline: true, outlineColor: color
             }
         });
     }
 
-    removeSensor(satelliteId, sensorIdentifier) {
-        if (this.viewer) {
-            const id = satelliteId + '-' + sensorIdentifier.key;
-            this.viewer.entities.removeById(id);
-            this.viewer.entities.removeById(id + '-footprint');
+    setSensorView(satelliteId, sensorObj) {
+        if (!this.viewer) return;
+        const satProps = this.entitiesMap.get(satelliteId);
+        if (!satProps) return;
+
+        this.stopSensorView();
+        this.viewer.trackedEntity = undefined;
+
+        let localBoresight;
+        switch (sensorObj.direction) {
+            case '+X': localBoresight = Cesium.Cartesian3.UNIT_X; break;
+            case '-X': localBoresight = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_X, new Cesium.Cartesian3()); break;
+            case '+Y': localBoresight = Cesium.Cartesian3.UNIT_Y; break;
+            case '-Y': localBoresight = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Y, new Cesium.Cartesian3()); break;
+            case '-Z': localBoresight = Cesium.Cartesian3.negate(Cesium.Cartesian3.UNIT_Z, new Cesium.Cartesian3()); break;
+            default:   localBoresight = Cesium.Cartesian3.UNIT_Z;
         }
+
+        this._sensorUnsubscribe = this.viewer.scene.postRender.addEventListener(() => {
+            const time = this.viewer.clock.currentTime;
+            const pos = satProps.positionProperty.getValue(time);
+            const ori = satProps.orientationProperty.getValue(time);
+            if (!pos || !ori) return;
+
+            const matrix = Cesium.Matrix3.fromQuaternion(ori);
+            const worldDir = Cesium.Matrix3.multiplyByVector(matrix, localBoresight, new Cesium.Cartesian3());
+            const worldUp = Cesium.Matrix3.multiplyByVector(matrix, Cesium.Cartesian3.UNIT_Y, new Cesium.Cartesian3());
+
+            this.viewer.camera.setView({
+                destination: pos,
+                orientation: { direction: worldDir, up: worldUp }
+            });
+        });
+    }
+
+    stopSensorView() {
+        if (this._sensorUnsubscribe) {
+            this._sensorUnsubscribe();
+            this._sensorUnsubscribe = null;
+        }
+    }
+
+    trackEntity(id) {
+        if (!this.viewer) return;
+        this.stopSensorView();
+        const entity = this.viewer.entities.getById(id);
+        if (entity) this.viewer.trackedEntity = entity;
+    }
+
+    flyToEntity(id) {
+        if (!this.viewer) return;
+        const entity = this.viewer.entities.getById(id);
+        if (entity) this.viewer.flyTo(entity);
+    }
+
+    removeSensor(satelliteId, sensorIdentifier) {
+        const id = satelliteId + '-' + (sensorIdentifier.key || sensorIdentifier);
+        this.viewer.entities.removeById(id);
+        this.viewer.entities.removeById(id + '-footprint');
     }
 
     updateSatellite(id, datum) {
         const props = this.entitiesMap.get(id);
+        const entity = this.viewer.entities.getById(id);
+        
+        // IF NOT VISIBLE: We still add the sample to the property 
+        // so the trail is correct, but we skip the clock/HPR logic.
         if (!props || datum.utc <= props.lastUpdateTime) return;
 
         const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
-        const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
+        const pos = Cesium.Cartesian3.fromDegrees(
+            datum['position.longitude'], 
+            datum['position.latitude'], 
+            datum['position.altitude']
+        );
         
+        // Essential: Add sample so the trail history grows
         props.positionProperty.addSample(time, pos);
-        props.orientationProperty.addSample(time, this.getOrientation(datum));
-        props.lastUpdateTime = datum.utc;
-
-        const delayedTime = Cesium.JulianDate.addSeconds(time, -1.0, new Cesium.JulianDate());
-        if (this.viewer && !this.viewer.trackedEntity) {
-            this.viewer.clock.currentTime = delayedTime;
+        
+        // OPTIMIZATION: Skip rotation math if the model is hidden
+        if (entity && entity.show !== false) {
+            props.orientationProperty.addSample(time, this.getOrientation(datum));
         }
+        
+        props.lastUpdateTime = datum.utc;
     }
 
     applyProcessedData(id, payload) {
@@ -264,13 +300,14 @@ export class CesiumService {
     removeSatellite(id) {
         if (this.viewer) {
             this.viewer.entities.removeById(id);
-            const sensors = this.viewer.entities.values.filter(e => e.id.startsWith(id + '-'));
+            const sensors = this.viewer.entities.values.filter(e => e.id && e.id.startsWith(id + '-'));
             sensors.forEach(s => this.viewer.entities.remove(s));
         }
         this.entitiesMap.delete(id);
     }
 
     destroy() {
+        this.stopSensorView();
         if (typeof this.stopBounds === 'function') this.stopBounds();
         if (this.viewer) { this.viewer.destroy(); this.viewer = null; }
         this.worker.terminate();

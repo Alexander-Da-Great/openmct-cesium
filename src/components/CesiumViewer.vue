@@ -21,35 +21,31 @@ onMounted(() => {
     const composition = openmct.composition.get(props.domainObject);
     
     const onAdd = (child) => {
-        const childId = openmct.objects.makeKeyString(child.identifier);
+    const childId = openmct.objects.makeKeyString(child.identifier);
+
+    if (child.type === 'satellite') {
+        cesiumService.addSatellite(child, openmct);
         
-        // Handle Satellite Addition
-        if (child.type === 'satellite') {
-            cesiumService.addSatellite(child, openmct);
-        }
+        // WATCH SATELLITE FOR TOGGLES (Orbit)
+        unsubscribes.set(childId, openmct.objects.observe(child, '*', (newSat) => {
+            cesiumService.updateSatelliteProperties(childId, newSat);
+        }));
 
-        // Handle Sensor Addition & Reactive Updates
-        if (child.type === 'satellite.sensor') {
-            /** * DYNAMIC PARENT LOOKUP
-             * We find the satellite this sensor belongs to. 
-             * 'props.domainObject' is the Globe.
-             */
-            const parentId = openmct.objects.makeKeyString(props.domainObject.identifier);
+        const sensorComposition = openmct.composition.get(child);
+        sensorComposition.on('add', (sensor) => {
+            const satId = openmct.objects.makeKeyString(child.identifier);
+            cesiumService.addSensor(satId, sensor);
             
-            // Initial Draw
-            cesiumService.addSensor(parentId, child); 
-
-            // REACTIVE OBSERVER: Listen for user editing FOV, Range, Direction, or Shape
-            // The '*' wildcard watches all property changes on the object
-            const unobserve = openmct.objects.observe(child, '*', (newObj) => {
-                // Because addSensor in the service starts with 'removeById', 
-                // this effectively "re-paints" the sensor with new math instantly.
-                cesiumService.addSensor(parentId, newObj); 
-            });
-
-            unsubscribes.set(childId, unobserve);
-        }
-    };
+            // WATCH SENSOR FOR TOGGLES (Cone)
+            unsubscribes.set(openmct.objects.makeKeyString(sensor.identifier), 
+                openmct.objects.observe(sensor, '*', (newVal) => {
+                    cesiumService.addSensor(satId, newVal);
+                })
+            );
+        });
+        sensorComposition.load();
+    }
+};
 
     const onRemove = (identifier) => {
         const id = openmct.objects.makeKeyString(identifier);

@@ -22,7 +22,31 @@ export default function CesiumPlugin() {
                 obj.composition = [];
                 obj.modelUrl = '/Satellite.glb';
                 obj.modelScale = 2.0;
-            }
+                obj.showOrbit = true;
+                obj.showSatellite = true;
+            },
+            form: [
+                { 
+                    name: 'Visible', 
+                    key: 'showSatellite', 
+                    control: 'select', 
+                    options: [
+                        { name: 'Yes', value: true },
+                        { name: 'No', value: false }
+                    ]
+                },
+                { 
+                    name: 'Show Orbital Trail', 
+                    key: 'showOrbit', 
+                    control: 'select', 
+                    options: [
+                        { name: 'Yes', value: true },
+                        { name: 'No', value: false }
+                    ]
+                },
+                { name: 'Model URL', key: 'modelUrl', control: 'textfield' },
+                { name: 'Model Scale', key: 'modelScale', control: 'numberfield' }
+            ]
         });
 
         openmct.types.addType('satellite.sensor', {
@@ -32,12 +56,21 @@ export default function CesiumPlugin() {
             initialize: (obj) => {
                 obj.shape = 'cone';
                 obj.fov = 30;
-                obj.range = 800000; // This is the "Height" of the cone
+                obj.range = 800000;
                 obj.color = '#ffff00';
-                obj.direction = '+Z'; // +X, -X, +Y, -Y, +Z, -Z
-                obj.offBoresightRotation = 0; // Rotation around the pointing axis
+                obj.direction = '+Z';
+                obj.showPOV = true;
             },
             form: [
+                { 
+                    name: 'Visible', 
+                    key: 'showPOV', 
+                    control: 'select', 
+                    options: [
+                        { name: 'Yes', value: true },
+                        { name: 'No', value: false }
+                    ]
+                },
                 { name: 'Shape', key: 'shape', control: 'select', options: [
                     { name: 'Conical', value: 'cone' },
                     { name: 'Frustum', value: 'frustum' }
@@ -49,22 +82,28 @@ export default function CesiumPlugin() {
                     { name: 'Right (+X)', value: '+X' }, { name: 'Left (-X)', value: '-X' },
                     { name: 'Up (+Y)', value: '+Y' }, { name: 'Down (-Y)', value: '-Y' }
                 ]},
-                { name: 'Local Rotation (Deg)', key: 'offBoresightRotation', control: 'numberfield' },
                 { name: 'Color', key: 'color', control: 'textfield' }
             ]
         });
+
+        openmct.actions.register({
+            name: 'View Through Sensor',
+            key: 'cesium.sensorview',
+            cssClass: 'icon-eye-open',
+            appliesTo: (objectPath) => objectPath[0].type === 'satellite.sensor',
+            invoke: (objectPath) => {
+                const sensorObj = objectPath[0];
+                const satelliteId = openmct.objects.makeKeyString(objectPath[1].identifier);
+                if (activeService) activeService.setSensorView(satelliteId, sensorObj);
+            }
+        });
         
         openmct.composition.addPolicy((parent, child) => {
-            if (parent.type === 'cesium.globe') {
-                return child.type === 'satellite';
-            }
-            if (parent.type === 'satellite') {
-                return child.type === 'satellite.sensor';
-            }
+            if (parent.type === 'cesium.globe') return child.type === 'satellite';
+            if (parent.type === 'satellite') return child.type === 'satellite.sensor';
             return true;
         });
 
-        // ACTIONS
         openmct.actions.register({
             name: 'Jump to Target',
             key: 'cesium.flyto',
@@ -87,7 +126,6 @@ export default function CesiumPlugin() {
             }
         });
 
-        // VIEW PROVIDER
         openmct.objectViews.addProvider({
             key: 'cesium-viewer',
             name: '3D View',
@@ -99,11 +137,7 @@ export default function CesiumPlugin() {
                 return {
                     show: (element) => {
                         activeService = instanceService;
-                        
-                        // Captures focus so tree actions know which globe to command
-                        element.addEventListener('mouseenter', () => {
-                            activeService = instanceService;
-                        });
+                        element.addEventListener('mousedown', () => { activeService = instanceService; }, true);
 
                         app = createApp(CesiumViewComponent, { domainObject });
                         app.provide('openmct', openmct);
