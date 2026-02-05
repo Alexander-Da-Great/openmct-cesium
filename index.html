@@ -25,10 +25,17 @@
         openmct.install(openmct.plugins.LocalStorage());
         openmct.install(openmct.plugins.MyItems());
         openmct.install(openmct.plugins.UTCTimeSystem());
+        openmct.install(openmct.plugins.PlaybackClock());
         openmct.install(openmct.plugins.Conductor({
             menuOptions: [
                 { name: "Fixed", timeSystem: "utc", bounds: { start: Date.now() - 3600000, end: Date.now() } },
-                { name: "Realtime", timeSystem: "utc", clock: "local", clockOffsets: { start: -900000, end: 30000 } }
+                { name: "Realtime", timeSystem: "utc", clock: "local", clockOffsets: { start: -900000, end: 30000 } },
+                { 
+                    name: "Playback", 
+                    timeSystem: "utc", 
+                    clock: "playback.clock", 
+                    clockOffsets: { start: -300000, end: 0 } 
+                }
             ]
         }));
 
