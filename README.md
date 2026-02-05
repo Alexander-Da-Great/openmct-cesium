@@ -2,8 +2,7 @@
 
 A plugin for [Open MCT](https://nasa.github.io/openmct)
 adding ceasium 3d  visualizations of telemetry data.
-
-<img width="2282" height="1320" alt="Screenshot 2026-01-30 at 5 22 03 PM" src="https://github.com/user-attachments/assets/7692264f-7d6e-4c4a-8253-06567e2853f0" />
+<img width="2065" height="1294" alt="Screenshot 2026-02-04 at 7 29 28 PM" src="https://github.com/user-attachments/assets/04d5eb16-c7eb-46d0-8cbb-ab13ec200978" />
 
 ## Build
 
