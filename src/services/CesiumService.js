@@ -1,157 +1,208 @@
 import * as Cesium from 'cesium';
 
-/**
- * CesiumService manages a single, non-reactive Cesium Viewer instance.
- * This service handles the initialization and lifecycle of the Cesium globe viewer,
- * similar to how Open MCT's imagery plugin manages high-frequency rendering loops.
- */
 class CesiumService {
-  constructor() {
-    this.viewer = null;
-    this.container = null;
-  }
-
-  /**
-   * Initialize the Cesium Viewer instance
-   * @param {HTMLElement} container - The DOM element to render the viewer into
-   * @param {Object} options - Optional Cesium Viewer configuration options
-   * @returns {Cesium.Viewer} The initialized viewer instance
-   */
-  initializeViewer(container, options = {}) {
-    if (this.viewer) {
-      console.warn('CesiumService: Viewer already initialized');
-      return this.viewer;
+    constructor() {
+        this.viewer = null;
+        this.entitiesMap = new Map();
+        this.stopBounds = () => {};
     }
 
-    this.container = container;
+    init(container, openmct) {
+        if (this.viewer) return;
 
-    // Default Cesium viewer configuration
-    const defaultOptions = {
-      animation: false,
-      timeline: false,
-      baseLayerPicker: true,
-      geocoder: true,
-      homeButton: true,
-      sceneModePicker: true,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      vrButton: false,
-      selectionIndicator: true,
-      infoBox: true,
-      requestRenderMode: true, // Optimize rendering - only render when needed
-      maximumRenderTimeChange: Infinity, // Prevent automatic rendering
-      ...options
-    };
+        this.viewer = new Cesium.Viewer(container, {
+            animation: false,
+            timeline: false,
+            requestRenderMode: false, 
+            sceneModePicker: true,
+            baseLayerPicker: true,
+            navigationHelpButton: false,
+            infoBox: false,
+            creditContainer: document.createElement("div")
+        });
 
-    try {
-      this.viewer = new Cesium.Viewer(container, defaultOptions);
+        this.viewer.clock.clockStep = Cesium.ClockStep.SYSTEM_CLOCK;
+        this.viewer.clock.shouldAnimate = true;
 
-      // Configure scene for better performance
-      this.configureScene();
-
-      console.log('CesiumService: Viewer initialized successfully');
-      return this.viewer;
-    } catch (error) {
-      console.error('CesiumService: Failed to initialize viewer', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Configure scene settings for optimal performance
-   * Following Open MCT's approach to high-frequency rendering optimization
-   */
-  configureScene() {
-    if (!this.viewer) {
-      return;
+        this.stopBounds = openmct.time.on('bounds', (bounds) => {
+            if (this.viewer && !openmct.time.isRealTime()) {
+                this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
+            }
+        });
     }
 
-    const { scene } = this.viewer;
-
-    // Enable FXAA for better visual quality
-    scene.postProcessStages.fxaa.enabled = true;
-
-    // Configure lighting
-    scene.globe.enableLighting = true;
-
-    // Set initial camera position (view of Earth from space)
-    this.viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(0.0, 0.0, 20000000.0)
-    });
-  }
-
-  /**
-   * Get the current viewer instance
-   * @returns {Cesium.Viewer|null}
-   */
-  getViewer() {
-    return this.viewer;
-  }
-
-  /**
-   * Request a render frame - useful when using requestRenderMode
-   */
-  requestRender() {
-    if (this.viewer && this.viewer.scene) {
-      this.viewer.scene.requestRender();
+    getOrientation(datum) {
+        const position = Cesium.Cartesian3.fromDegrees(
+            datum['position.longitude'], 
+            datum['position.latitude'], 
+            datum['position.altitude']
+        );
+        const hpr = new Cesium.HeadingPitchRoll(
+            Cesium.Math.toRadians(datum['attitude.heading'] || 0),
+            Cesium.Math.toRadians(datum['attitude.pitch'] || 0),
+            Cesium.Math.toRadians(datum['attitude.roll'] || 0)
+        );
+        return Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
     }
-  }
 
-  /**
-   * Fly to a specific location
-   * @param {Object} options - Cesium camera fly-to options
-   */
-  flyTo(options) {
-    if (this.viewer) {
-      this.viewer.camera.flyTo(options);
-    }
-  }
+    async addSatellite(child, openmct) {
+        const id = openmct.objects.makeKeyString(child.identifier);
+        const bounds = openmct.time.getBounds();
+        const history = await openmct.telemetry.request(child, bounds);
+        
+        const positionProperty = new Cesium.SampledPositionProperty();
+        const orientationProperty = new Cesium.SampledProperty(Cesium.Quaternion);
+        
+        positionProperty.setInterpolationOptions({
+            interpolationDegree: 1,
+            interpolationAlgorithm: Cesium.LinearApproximation
+        });
 
-  /**
-   * Add an entity to the viewer
-   * @param {Object} entityOptions - Cesium entity configuration
-   * @returns {Cesium.Entity|null}
-   */
-  addEntity(entityOptions) {
-    if (this.viewer) {
-      return this.viewer.entities.add(entityOptions);
-    }
-    return null;
-  }
+        orientationProperty.setInterpolationOptions({
+            interpolationDegree: 1,
+            interpolationAlgorithm: Cesium.LinearApproximation
+        });
 
-  /**
-   * Remove an entity from the viewer
-   * @param {Cesium.Entity} entity - The entity to remove
-   */
-  removeEntity(entity) {
-    if (this.viewer && entity) {
-      this.viewer.entities.remove(entity);
-    }
-  }
+        positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
+        orientationProperty.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
 
-  /**
-   * Clean up and destroy the viewer instance
-   * Important for preventing memory leaks when component is unmounted
-   */
-  destroy() {
-    if (this.viewer) {
-      console.log('CesiumService: Destroying viewer');
-      this.viewer.destroy();
-      this.viewer = null;
-      this.container = null;
-    }
-  }
+        if (history && history.length > 0) {
+            history.forEach(p => {
+                const time = Cesium.JulianDate.fromDate(new Date(p.utc));
+                const pos = Cesium.Cartesian3.fromDegrees(p['position.longitude'], p['position.latitude'], p['position.altitude']);
+                positionProperty.addSample(time, pos);
+                orientationProperty.addSample(time, this.getOrientation(p));
+            });
+        }
 
-  /**
-   * Resize the viewer (useful for responsive layouts)
-   */
-  resize() {
-    if (this.viewer) {
-      this.viewer.resize();
-      this.requestRender();
+        // --- 1. Main Spacecraft Entity ---
+        // TODO: this.viewer.entities replaced with PointPrimitiveCollection or BillboardCollection
+        const satellite = this.viewer.entities.add({
+            id: id,
+            name: child.name,
+            position: positionProperty,
+            orientation: orientationProperty,
+            model: {
+                uri: child.modelUrl || '/Satellite.glb',
+                scale: parseFloat(child.modelScale) || 1.0,
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 5000000.0)
+            },
+            point: {
+                pixelSize: 10,
+                color: Cesium.Color.CYAN,
+                outlineColor: Cesium.Color.WHITE,
+                outlineWidth: 2,
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(5000000.0, Number.MAX_VALUE)
+            },
+            label: {
+                text: child.name,
+                font: '12pt monospace',
+                pixelOffset: new Cesium.Cartesian2(0, -25),
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                outlineWidth: 2,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY 
+            },
+            path: {
+                resolution: 1,
+                material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.1, color: Cesium.Color.CYAN }),
+                width: 3,
+                leadTime: 0, 
+                trailTime: 3600  
+            }
+        });
+
+        // --- 2. Sensor Cone Child Entity ---
+        const range = child.sensorRange || 1000000;
+        const fovRad = Cesium.Math.toRadians(child.sensorFov || 30);
+        const bottomRadius = Math.tan(fovRad / 2) * range;
+
+        this.viewer.entities.add({
+            parent: satellite,
+            // Offset logic: Move the cone center "forward" so the tip is at the satellite origin
+            position: new Cesium.CallbackProperty((time) => {
+                const pos = positionProperty.getValue(time);
+                const ori = orientationProperty.getValue(time);
+                if (!pos || !ori) return pos;
+
+                // Create a transformation matrix from orientation
+                const matrix = Cesium.Matrix3.fromQuaternion(ori);
+                // Get the 'Forward' vector (usually Z in GLB space)
+                const direction = Cesium.Matrix3.getColumn(matrix, 2, new Cesium.Cartesian3());
+                // Center of cylinder is half-range away from the satellite
+                const offset = Cesium.Cartesian3.multiplyByScalar(direction, range / 2, new Cesium.Cartesian3());
+                
+                return Cesium.Cartesian3.add(pos, offset, new Cesium.Cartesian3());
+            }, false),
+            orientation: orientationProperty,
+            cylinder: {
+                length: range,
+                topRadius: bottomRadius,
+                bottomRadius: 0.0,
+                material: Cesium.Color.CYAN.withAlpha(0.3),
+                outline: true,
+                outlineColor: Cesium.Color.CYAN.withAlpha(0.5)
+            }
+        });
+
+        this.entitiesMap.set(id, { positionProperty, orientationProperty });
     }
-  }
+
+    updateSatellite(id, datum) {
+        const props = this.entitiesMap.get(id);
+        if (props) {
+            const time = Cesium.JulianDate.fromDate(new Date(datum.utc));
+            const pos = Cesium.Cartesian3.fromDegrees(datum['position.longitude'], datum['position.latitude'], datum['position.altitude']);
+            props.positionProperty.addSample(time, pos);
+            props.orientationProperty.addSample(time, this.getOrientation(datum));
+        }
+    }
+
+    resetView() {
+        if (!this.viewer) return;
+        this.viewer.trackedEntity = undefined;
+        this.viewer.camera.cancelFlight();
+        this.viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(0.0, 0.0, 20000000.0),
+            duration: 2.0
+        });
+    }
+
+    trackEntity(id) {
+        if (!this.viewer) return;
+        const entity = this.viewer.entities.getById(id);
+        if (entity) {
+            this.viewer.camera.cancelFlight();
+            this.viewer.trackedEntity = entity;
+        }
+    }
+
+    flyToEntity(id) {
+        if (!this.viewer) return;
+        this.viewer.trackedEntity = undefined; 
+        this.viewer.camera.cancelFlight();
+        const entity = this.viewer.entities.getById(id);
+        if (entity) {
+            this.viewer.flyTo(entity, {
+                offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-45), 1500000),
+                duration: 2.0
+            });
+        }
+    }
+
+    removeSatellite(id) {
+        if (this.viewer) this.viewer.entities.removeById(id);
+        this.entitiesMap.delete(id);
+    }
+
+    destroy() {
+        if (typeof this.stopBounds === 'function') this.stopBounds();
+        if (this.viewer) {
+            this.viewer.destroy();
+            this.viewer = null;
+        }
+        this.entitiesMap.clear();
+    }
 }
 
-// Export a singleton instance
 export default new CesiumService();
