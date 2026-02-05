@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "cesium": "latest",
-    "openmct": "latest",
+    "openmct": "file:../openmct",
     "vue": "^3.4.24"
   },
   "devDependencies": {

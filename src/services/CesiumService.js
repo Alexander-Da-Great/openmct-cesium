@@ -39,11 +39,20 @@ export class CesiumService {
             creditContainer: document.createElement("div")
         });
 
-        this.viewer.clock.shouldAnimate = true;
-        this.stopBounds = openmct.time.on('bounds', (bounds) => {
-            if (this.viewer && !openmct.time.isRealTime()) {
-                this.viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
-            }
+        this.viewer.clock.shouldAnimate = false;
+        this.stopBounds = openmct.time.on('bounds', (bounds, isTick) => {
+            if (!this.viewer) return;
+
+            // 1. NEVER let Cesium animate on its own. 
+            // Open MCT's PlaybackClock will handle the "ticking" by updating the bounds.
+            this.viewer.clock.shouldAnimate = false;
+
+            // 2. Map the Conductor's "needle" (bounds.end) directly to the Cesium scene time.
+            const targetTime = Cesium.JulianDate.fromDate(new Date(bounds.end));
+            this.viewer.clock.currentTime = targetTime;
+
+            // 3. Since we are in requestRenderMode, we MUST manually trigger a frame update.
+            this.viewer.scene.requestRender();
         });
     }
 
